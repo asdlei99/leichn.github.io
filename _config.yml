@@ -1,8 +1,8 @@
 # Site settings
 title: leisure blog
-SEOTitle: 谁的博客 | BY Blog
+SEOTitle: 谁的博客
 header-img: img/post-bg-desk.jpg
-email: lei.huang.chn@gmail.com
+# email: lei.huang.chn@gmail.com
 description: "Every failure is leading towards success."
 keyword: "BY, BY Blog, 柏荧的博客, qiubaiying, 邱柏荧, iOS, Apple, iPhone"
 url: "http://leihl.github.io"          # your host, for absolute URL
@@ -12,7 +12,7 @@ github_repo: "https://github.com/leihl/heihl.github.io.git" # you code repositor
 # Sidebar settings
 sidebar: true                           # whether or not using Sidebar.
 sidebar-about-description: "Goals determine what you going to be!"
-sidebar-avatar: /img/about-BY-gentle.jpg      # use absolute URL, seeing it's used in both `/` and `/about/`
+sidebar-avatar: /img/none.jpg      # use absolute URL, seeing it's used in both `/` and `/about/`
 
 
 
@@ -99,10 +99,10 @@ service-worker: true
 # Friends
 friends: [
     {
-        title: "WY",
-        href: "http://zhengwuyang.com"
+        title: "CSDN",
+        href: "http://.com"
     },{
-        title: "简书·BY",
-        href: "http://www.jianshu.com/u/e71990ada2fd"
+        title: "博客园",
+        href: "http://.com"
     }
 ]
