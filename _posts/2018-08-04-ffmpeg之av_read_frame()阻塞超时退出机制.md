@@ -1,14 +1,8 @@
-   日期   |版本|  作者 |修改记录
-   ----   |----|  ---- |:---- 
-2017-09-05|V1.0|leisure|初稿。源码分析基于ffmpeg-3.3版本，函数调用关系分析简单罗列，待整理。
-2018-04-25|V1.1|leisure|增加只有表、无音视频数据时的阻塞退出方法。未分析FIFO文件回调机制。
-2018-07-28|V1.1|leisure|整理文档格式，由txt模式改为md格式
-
-# 一、问题描述 #
+# 一、问题描述
 调用ffmpeg的avformat_open_input()及av_read_frame()函数时，由于输入源(文件或TCP/UDP流等)的阻塞性质，导致这两个函数阻塞，线程阻塞后无法响应其他事件。
 
-# 二、解决方法 #
-## 1. 打开输入源时设为非阻塞(不推荐) ##
+# 二、解决方法
+## 1. 打开输入源时设为非阻塞(不推荐)
 ```c
 AVFormatContext *p_ifmt_ctx = NULL;  
 p_ifmt_ctx = avformat_alloc_context();  
@@ -17,7 +11,7 @@ avformat_open_input(&p_ifmt_ctx, in_fname, 0, 0);
 ......
 ```
 
-## 2. 若输入源是阻塞型FIFO文件 ##
+## 2. 若输入源是阻塞型FIFO文件
 需要**同时使用**如下两种方法  
 **1 避免读空FIFO导致阻塞：**  
 使用select/poll等设置超时时间，判断FIFO里有数据后再进行读操作：  
@@ -49,7 +43,7 @@ ret = av_read_frame(p_ifmt_ctx, &pkt);
 **2 避免TS流中只有表无实际音视频数据导致的阻塞：**  
 利用IO中断回调函数，同如下第3步描述
 
-## 3. 若输入源是TCP/UDP网址 ##
+## 3. 若输入源是TCP/UDP网址
 利用IO中断回调函数(数据结构AVIOInterruptCB)决定退出时机：  
 ```c
 static int condition;
@@ -73,9 +67,9 @@ static int decode_interrupt_cb(void *ctx)
     }
 }
 ```
-# 三、原理分析 #
+# 三、原理分析
 
-## 1. avformat_alloc_context()解析 ##
+## 1. avformat_alloc_context()解析
 ```c
 main()->
 stream_open()->
@@ -85,7 +79,7 @@ avformat_get_context_defaults()->
 s->io_open  = io_open_default;
 ```
 
-## 2. avformat_open_input()解析 ##
+## 2. avformat_open_input()解析
 ```c
 main()->
 stream_open()->
@@ -135,7 +129,7 @@ s->read_packet = read_packet;   // p_ifmt_ctx->pb->read_packet，等号右边实
 io_read_packet()
 ```
 
-## 3. av_read_frame()解析 ##
+## 3. av_read_frame()解析
 ```c
 main()->
 stream_open()->
@@ -157,9 +151,9 @@ file_read()                    // 函数指针h->prot->url_read就等于file_rea
 或tcp_read()
 ```
 
-## 4. 中断回调核心处理函数 ##
-```c
+## 4. 中断回调核心处理函数
 retry_transfer_wrapper()函数调用如下代码：
+```c
 while (len < size_min) {
     if (ff_check_interrupt(&h->interrupt_callback)) // 调用中断回调函数，若返回1则av_read_frame返回
         return AVERROR_EXIT;
@@ -167,7 +161,7 @@ while (len < size_min) {
 }
 ```
 
-## 5. file_read()和tcp_read()处理的不同之处 ##
+## 5. file_read()和tcp_read()处理的不同之处
 
 **5.1 file_read(): 对于输入源是文件(包括FIFO)**
 
@@ -203,7 +197,7 @@ ff_network_wait_fd()->
 ret = poll(&p, 1, POLLING_TIME);
 ```
 
-## 6. 重要数据结构 ##
+## 6. 重要数据结构
 ```c
 AVInputFormat ff_aac_demuxer = {
     .name         = "aac",
@@ -283,10 +277,15 @@ static const URLProtocol *url_protocols[] = {
     NULL };
 ```
 
-# 四、参考资料： #
-[1] [http://ffmpeg.org/doxygen/1.0/structAVIOInterruptCB.html](http://ffmpeg.org/doxygen/1.0/structAVIOInterruptCB.html)
-[2] [https://medium.com/@Masutangu/ffmpeg-%E6%B5%85%E6%9E%90-17985525d9b6](https://medium.com/@Masutangu/ffmpeg-%E6%B5%85%E6%9E%90-17985525d9b6)
-[3] [http://blog.csdn.net/finewind/article/details/39502963](http://blog.csdn.net/finewind/article/details/39502963)
-[4] [http://blog.csdn.net/leixiaohua1020/article/details/44220151](http://blog.csdn.net/leixiaohua1020/article/details/44220151)
-[5] [http://blog.csdn.net/zhuweigangzwg/article/details/37929461](http://blog.csdn.net/zhuweigangzwg/article/details/37929461)
-[6] [http://www.mamicode.com/info-detail-418734.html](http://www.mamicode.com/info-detail-418734.html)
+# 四、参考资料
+[1] <http://ffmpeg.org/doxygen/1.0/structAVIOInterruptCB.html>  
+[2] <https://medium.com/@Masutangu/ffmpeg-%E6%B5%85%E6%9E%90-17985525d9b6>  
+[3] <http://blog.csdn.net/finewind/article/details/39502963>  
+[4] <http://blog.csdn.net/leixiaohua1020/article/details/44220151>  
+[5] <http://blog.csdn.net/zhuweigangzwg/article/details/37929461>  
+[6] <http://www.mamicode.com/info-detail-418734.html>  
+
+日期         版本    作者         修改记录
+2017-09-05  V1.0    leisure     初稿。源码分析基于ffmpeg-3.3版本，函数调用关系分析简单罗列，待整理。
+2018-04-25  V1.1    leisure     增加只有表、无音视频数据时的阻塞退出方法。未分析FIFO文件回调机制。
+2018-07-28  V1.1    leisure     整理文档格式，由txt模式改为md格式
