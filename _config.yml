@@ -46,7 +46,7 @@ gems: [jekyll-paginate]
 #highlighter: rouge
 #kramdown:
 #  input: GFM                            # use Github Flavored Markdown !important
-markdown:redcarpet
+markdown: redcarpet
 highlighter: rouge
 redcarpet:
   extensions: [ "hard_wrap","autolink", "tables", "strikethrough", "superscript", "with_toc_data", "highlight", "prettify","no_intra_emphasis"]
