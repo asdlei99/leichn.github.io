@@ -1,7 +1,18 @@
-// 20181127
-// 参考1: https://blog.csdn.net/leixiaohua1020/article/details/38868499
-// 参考2: http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial01.html
-//        http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial02.html
+/*****************************************************************
+ * ffplayer.c
+ *
+ * history:
+ *   2018-11-27 - [lei.huang] created file
+ *
+ * details:
+ *   A simple ffmpeg player.
+ *
+ * refrence:
+ *   1. https://blog.csdn.net/leixiaohua1020/article/details/38868499
+ *   2. http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial01.html
+ *   3. http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial02.html
+******************************************************************/
+
 #include <stdio.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -16,7 +27,7 @@ int main(int argc, char *argv[])
     // Initalizing these to NULL prevents segfaults!
     AVFormatContext*    p_fmt_ctx = NULL;
     AVCodecContext*     p_codec_ctx = NULL;
-    AVCodecParameters*  p_codec_par = NULL;      // 此参数用于替换旧版AVCodecContext
+    AVCodecParameters*  p_codec_par = NULL;
     AVCodec*            p_codec = NULL;
     AVFrame*            p_frm_raw = NULL;        // 帧，由包解码得到原始帧
     AVFrame*            p_frm_yuv = NULL;        // 帧，由原始帧色彩转换得到
@@ -109,12 +120,12 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // 6. 分配AVFrame
-    // 6.1 分配AVFrame结构，注意并不分配data buffer(即AVFrame.*data[])
+    // A6. 分配AVFrame
+    // A6.1 分配AVFrame结构，注意并不分配data buffer(即AVFrame.*data[])
     p_frm_raw = av_frame_alloc();
     p_frm_yuv = av_frame_alloc();
 
-    // 6.2 为AVFrame.*data[]手工分配缓冲区，用于存储sws_scale()中目的帧视频数据
+    // A6.2 为AVFrame.*data[]手工分配缓冲区，用于存储sws_scale()中目的帧视频数据
     //     p_frm_raw的data_buffer由av_read_frame()分配，因此不需手工分配
     //     p_frm_yuv的data_buffer无处分配，因此在此处手工分配
     buf_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, 
