@@ -1,3 +1,8 @@
+日期　　　　版本　作者　修改记录  
+2017-09-05　V1.0　lei 　初稿。源码分析基于ffmpeg-3.3版本，函数调用关系分析简单罗列，待整理。  
+2018-04-25　V1.1　lei 　增加只有表、无音视频数据时的阻塞退出方法。未分析FIFO文件回调机制。  
+2018-07-28　V1.1　lei 　整理文档格式，由txt模式改为md格式。 
+
 # 一、问题描述
 调用ffmpeg的avformat_open_input()及av_read_frame()函数时，由于输入源(文件或TCP/UDP流等)的阻塞性质，导致这两个函数阻塞，线程阻塞后无法响应其他事件。
 
@@ -284,9 +289,3 @@ static const URLProtocol *url_protocols[] = {
 [4] <http://blog.csdn.net/leixiaohua1020/article/details/44220151>  
 [5] <http://blog.csdn.net/zhuweigangzwg/article/details/37929461>  
 [6] <http://www.mamicode.com/info-detail-418734.html>  
-
-# 五、修改记录
-日期　　　　版本　作者　　　修改记录  
-2017-09-05　V1.0　leisure 　初稿。源码分析基于ffmpeg-3.3版本，函数调用关系分析简单罗列，待整理。  
-2018-04-25　V1.1　leisure 　增加只有表、无音视频数据时的阻塞退出方法。未分析FIFO文件回调机制。  
-2018-07-28　V1.1　leisure 　整理文档格式，由txt模式改为md格式。 
