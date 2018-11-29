@@ -1,0 +1,9 @@
+*.o
+*.tmp
+*~
+~*
+*.bak
+*.si4project
+*.vscode
+*.code-workspace
+*tags:
