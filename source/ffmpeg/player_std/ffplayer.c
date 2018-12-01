@@ -356,9 +356,9 @@ int main(int argc, char *argv[])
             // 将源图像中一片连续的区域经过处理后更新到目标图像对应区域，处理的图像区域必须逐行连续
             // plane: 如YUV有Y、U、V三个plane，RGB有R、G、B三个plane
             // slice: 图像中一片连续的行，必须是连续的，顺序由顶部到底部或由底部到顶部
-            // stride/pitch: 一行图像所占的空间字节数，Stride = BytesPerPixel * Width，4字节对齐
+            // stride/pitch: 一行图像所占的字节数，Stride=BytesPerPixel*Width+Padding，注意对齐
             // AVFrame.*data[]: 每个数组元素指向对应plane
-            // AVFrame.linesize[]: 每个数组元素表示对应plane中一行图像所占的空间字节数
+            // AVFrame.linesize[]: 每个数组元素表示对应plane中一行图像所占的字节数
             sws_scale(sws_ctx,                                  // sws context
                       (const uint8_t *const *)p_frm_raw->data,  // src slice
                       p_frm_raw->linesize,                      // src stride
@@ -395,12 +395,11 @@ int main(int argc, char *argv[])
         }
         else if (sdl_event.type == SDL_KEYDOWN)
         {
-            printf("SDL event KEYDOWN\n");
             if (sdl_event.key.keysym.sym == SDLK_SPACE)
             {
                 // 用户按空格键，暂停/继续状态切换
-                printf("player %s\n", s_playing_pause ? "pause" : "continue");
                 s_playing_pause = !s_playing_pause;
+                printf("player %s\n", s_playing_pause ? "pause" : "continue");
             }
         }
         else if (sdl_event.type == SDL_QUIT)
@@ -421,7 +420,7 @@ exit8:
 exit7:
     av_packet_unref(p_packet);
 exit6:
-   sws_freeContext(sws_ctx); 
+    sws_freeContext(sws_ctx); 
 exit5:
     av_free(buffer);
 exit4:
