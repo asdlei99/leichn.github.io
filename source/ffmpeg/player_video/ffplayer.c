@@ -12,7 +12,7 @@
  *   1. https://blog.csdn.net/leixiaohua1020/article/details/38868499
  *   2. http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial01.html
  *   3. http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial02.html
-*******************************************************************************/
+ *******************************************************************************/
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
     SDL_Event           sdl_event;
 
     res = 0;
-    
+
     if (argc < 2)
     {
         printf("Please provide a movie file\n");
@@ -126,7 +126,7 @@ int main(int argc, char *argv[])
 
     // A5.1 获取解码器参数AVCodecParameters
     p_codec_par = p_fmt_ctx->streams[v_idx]->codecpar;
-    
+
     // A5.2 获取解码器
     p_codec = avcodec_find_decoder(p_codec_par->codec_id);
     if (p_codec == NULL)
@@ -135,7 +135,7 @@ int main(int argc, char *argv[])
         res = -1;
         goto exit1;
     }
-    
+
     // A5.3 构建解码器AVCodecContext
     // A5.3.1 p_codec_ctx初始化：分配结构体，使用p_codec初始化相应成员为默认值
     p_codec_ctx = avcodec_alloc_context3(p_codec);
@@ -182,7 +182,7 @@ int main(int argc, char *argv[])
                                         p_codec_ctx->width, 
                                         p_codec_ctx->height, 
                                         1
-                                       );
+                                        );
     // buffer将作为p_frm_yuv的视频数据缓冲区
     buffer = (uint8_t *)av_malloc(buf_size);
     if (buffer == NULL)
@@ -199,7 +199,7 @@ int main(int argc, char *argv[])
                                p_codec_ctx->width,  // width
                                p_codec_ctx->height, // height
                                1                    // align
-                              );
+                               );
     if (ret < 0)
     {
         printf("av_image_fill_arrays() failed %d\n", ret);
@@ -218,7 +218,7 @@ int main(int argc, char *argv[])
                              NULL,                  // src filter
                              NULL,                  // dst filter
                              NULL                   // param
-                            );
+                             );
     if (sws_ctx == NULL)
     {
         printf("sws_getContext() failed\n");
@@ -233,7 +233,7 @@ int main(int argc, char *argv[])
         res = -1;
         goto exit6;
     }
-    
+
     // B2. 创建SDL窗口，SDL 2.0支持多窗口
     //     SDL_Window即运行程序后弹出的视频窗口，同SDL 1.x中的SDL_Surface
     screen = SDL_CreateWindow("Simplest ffmpeg player's Window", 
@@ -242,7 +242,7 @@ int main(int argc, char *argv[])
                               p_codec_ctx->width, 
                               p_codec_ctx->height,
                               SDL_WINDOW_OPENGL
-                             );
+                              );
 
     if (screen == NULL)
     {  
@@ -267,7 +267,8 @@ int main(int argc, char *argv[])
                                     SDL_PIXELFORMAT_IYUV, 
                                     SDL_TEXTUREACCESS_STREAMING,
                                     p_codec_ctx->width,
-                                    p_codec_ctx->height);
+                                    p_codec_ctx->height
+                                    );
     if (sdl_texture == NULL)
     {  
         printf("SDL_CreateTexture() failed: %s\n", SDL_GetError());  
@@ -317,7 +318,7 @@ int main(int argc, char *argv[])
                     break;
                 }
             }
-        
+
             // A9. 视频解码：packet ==> frame
             // A9.1 向解码器喂数据，一个packet可能是一个视频帧或多个音频帧，此处音频帧已被上一句滤掉
             ret = avcodec_send_packet(p_codec_ctx, p_packet);
@@ -338,7 +339,7 @@ int main(int argc, char *argv[])
                 else if (ret == AVERROR(EAGAIN))
                 {
                     printf("avcodec_receive_frame(): output is not available in this state - "
-                           "user must try to send new input\n");
+                            "user must try to send new input\n");
                 }
                 else if (ret == AVERROR(EINVAL))
                 {
@@ -366,8 +367,8 @@ int main(int argc, char *argv[])
                       p_codec_ctx->height,                      // src slice height
                       p_frm_yuv->data,                          // dst planes
                       p_frm_yuv->linesize                       // dst strides
-                     );
-            
+                      );
+
             // B7. 使用新的YUV像素数据更新SDL_Rect
             SDL_UpdateYUVTexture(sdl_texture,                   // sdl texture
                                  &sdl_rect,                     // sdl rect
@@ -378,7 +379,7 @@ int main(int argc, char *argv[])
                                  p_frm_yuv->data[2],            // v plane
                                  p_frm_yuv->linesize[2]         // v pitch
                                  );
-            
+
             // B8. 使用特定颜色清空当前渲染目标
             SDL_RenderClear(sdl_renderer);
             // B9. 使用部分图像数据(texture)更新当前渲染目标
@@ -386,8 +387,8 @@ int main(int argc, char *argv[])
                            sdl_texture,                         // sdl texture
                            NULL,                                // src rect, if NULL copy texture
                            &sdl_rect                            // dst rect
-                          );
-            
+                           );
+
             // B10. 执行渲染，更新屏幕显示
             SDL_RenderPresent(sdl_renderer);
 
