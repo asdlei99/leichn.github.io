@@ -125,22 +125,22 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block)
  */
 int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_size)
 {
-    AVPacket packet;
-    AVFrame frame;
+    AVPacket *p_packet = (AVPacket *)av_malloc(sizeof(AVPacket));
+    AVFrame *p_frame = av_frame_alloc();
     
     int frm_size = 0;
     int ret_size = 0;
     int ret;
 
     // 1. 从队列中读出一包音频数据
-    if (packet_queue_get(&s_audio_pkt_queue, &packet, 1) < 0)
+    if (packet_queue_get(&s_audio_pkt_queue, p_packet, 1) < 0)
     {
         return -1;
     }
 
     // 2. 将音频包pkt解码成音频帧frame
     // 2.1 向解码器喂数据，每次喂一个packet
-    ret = avcodec_send_packet(p_codec_ctx, &packet);
+    ret = avcodec_send_packet(p_codec_ctx, p_packet);
     if (ret != 0)
     {
         printf("avcodec_send_packet() failed %d\n", ret);
@@ -156,7 +156,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         }
 
         // 2.2 接收解码器输出的数据，每次接收一个frame
-        ret = avcodec_receive_frame(p_codec_ctx, &frame);
+        ret = avcodec_receive_frame(p_codec_ctx, p_frame);
         if (ret != 0)
         {
             if (ret == AVERROR_EOF)
@@ -191,7 +191,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         // 3. 根据相应音频参数，获得所需缓冲区大小
         frm_size = av_samples_get_buffer_size(NULL, 
                                               p_codec_ctx->channels,
-                                              frame.nb_samples,
+                                              p_frame->nb_samples,
                                               p_codec_ctx->sample_fmt,
                                               1);
 
@@ -199,7 +199,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         assert(frm_size <= buf_size);
         
         // 4. 将音频帧拷贝到函数输出参数audio_buf
-        memcpy(audio_buf, frame.data[0], frm_size);
+        memcpy(audio_buf, p_frame->data[0], frm_size);
         
         if (frm_size > 0)
         {
@@ -208,7 +208,10 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         printf("size %d\n", ret_size);
     }
 
-    av_packet_unref(&packet);
+    if (p_packet->data != NULL)
+    {
+        av_packet_unref(p_packet);
+    }
 
     return ret_size;
 }
@@ -265,10 +268,15 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
 }
 
 
-// 每40ms发送一个解码刷新事件，使解码器以25FPS的帧率工作
+// 按照opaque传入的播放帧率参数，按固定间隔时间发送刷新事件
 int sdl_thread_handle_refreshing(void *opaque)
 {
     SDL_Event sdl_event;
+    
+    int frame_rate = *((int *)opaque);
+    int interval = (frame_rate > 0) ? 1000/frame_rate : 40;
+
+    printf("frame rate %d FPS, refresh interval %d ms\n", frame_rate, interval);
 
     while (!s_playing_exit)
     {
@@ -277,7 +285,7 @@ int sdl_thread_handle_refreshing(void *opaque)
             sdl_event.type = SDL_USEREVENT_REFRESH;
             SDL_PushEvent(&sdl_event);
         }
-        SDL_Delay(40);
+        SDL_Delay(interval);
     }
 
     return 0;
@@ -317,6 +325,7 @@ int main(int argc, char *argv[])
     int                 a_idx;
     int                 ret;
     int                 res;
+    int                 frame_rate;
 
     res = 0;
 
@@ -359,7 +368,10 @@ int main(int argc, char *argv[])
         if ((p_fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) && (v_idx == -1))
         {
             v_idx = i;
-            printf("Find a video stream, index %d\n", v_idx);
+            int num = p_fmt_ctx->streams[i]->avg_frame_rate.num;
+            int den = p_fmt_ctx->streams[i]->avg_frame_rate.den;
+            printf("Find a video stream, index %d, frame rate %d:%d\n", v_idx, num, den);
+            frame_rate = num / den;
         }
         if ((p_fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) && (a_idx == -1))
         {
@@ -486,12 +498,12 @@ int main(int argc, char *argv[])
     }
     // 使用给定参数设定p_frm_yuv->data和p_frm_yuv->linesize
     ret = av_image_fill_arrays(p_frm_yuv->data,     // dst data[]
-            p_frm_yuv->linesize, // dst linesize[]
-            buffer,              // src buffer
-            AV_PIX_FMT_YUV420P,  // pixel format
-            p_vcodec_ctx->width,  // width
-            p_vcodec_ctx->height, // height
-            1                    // align
+            p_frm_yuv->linesize,    // dst linesize[]
+            buffer,                 // src buffer
+            AV_PIX_FMT_YUV420P,     // pixel format
+            p_vcodec_ctx->width,    // width
+            p_vcodec_ctx->height,   // height
+            1                       // align
             );
     if (ret < 0)
     {
@@ -506,11 +518,11 @@ int main(int argc, char *argv[])
             p_vcodec_ctx->pix_fmt,  // src format
             p_vcodec_ctx->width,    // dst width
             p_vcodec_ctx->height,   // dst height
-            AV_PIX_FMT_YUV420P,    // dst format
-            SWS_BICUBIC,           // flags
-            NULL,                  // src filter
-            NULL,                  // dst filter
-            NULL                   // param
+            AV_PIX_FMT_YUV420P,     // dst format
+            SWS_BICUBIC,            // flags
+            NULL,                   // src filter
+            NULL,                   // dst filter
+            NULL                    // param
             );
     if (sws_ctx == NULL)
     {
@@ -527,9 +539,9 @@ int main(int argc, char *argv[])
         goto exit6;
     }
 
-
     packet_queue_init(&s_audio_pkt_queue);
 
+    #if 1
     // https://wiki.libsdl.org/SDL_AudioSpec
     // 打开音频设备并创建音频处理线程。期望的参数是wanted_spec，实际得到的硬件参数是actual_spec
     // 1) SDL提供两种使音频设备取得音频数据方法：
@@ -552,6 +564,7 @@ int main(int argc, char *argv[])
     // SDL_PauseAudio(0)，这样就可以在打开音频设备后为回调函数安全初始化数据
     // 在暂停期间，会将静音值往音频设备写。
     SDL_PauseAudio(0);
+    #endif
 
 
     // B2. 创建SDL窗口，SDL 2.0支持多窗口
@@ -609,7 +622,7 @@ int main(int argc, char *argv[])
     }
 
     // B5. 创建定时刷新事件线程，按照预设帧率产生刷新事件
-    sdl_thread = SDL_CreateThread(sdl_thread_handle_refreshing, NULL, NULL);
+    sdl_thread = SDL_CreateThread(sdl_thread_handle_refreshing, NULL, (void *)&frame_rate);
     if (sdl_thread == NULL)
     {  
         printf("SDL_CreateThread() failed: %s\n", SDL_GetError());  

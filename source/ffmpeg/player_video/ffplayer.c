@@ -29,10 +29,15 @@
 static bool s_playing_exit = false;
 static bool s_playing_pause = false;
 
-// 每40ms发送一个解码刷新事件，使解码器以25FPS的帧率工作
+// 按照opaque传入的播放帧率参数，按固定间隔时间发送刷新事件
 int sdl_thread_handle_refreshing(void *opaque)
 {
     SDL_Event sdl_event;
+
+    int frame_rate = *((int *)opaque);
+    int interval = (frame_rate > 0) ? 1000/frame_rate : 40;
+
+    printf("frame rate %d FPS, refresh interval %d ms\n", frame_rate, interval);
 
     while (!s_playing_exit)
     {
@@ -41,7 +46,7 @@ int sdl_thread_handle_refreshing(void *opaque)
             sdl_event.type = SDL_USEREVENT_REFRESH;
             SDL_PushEvent(&sdl_event);
         }
-        SDL_Delay(40);
+        SDL_Delay(interval);
     }
 
     return 0;
@@ -64,6 +69,7 @@ int main(int argc, char *argv[])
     int                 v_idx;
     int                 ret;
     int                 res;
+    int                 frame_rate;
     SDL_Window*         screen; 
     SDL_Renderer*       sdl_renderer;
     SDL_Texture*        sdl_texture;
@@ -112,6 +118,8 @@ int main(int argc, char *argv[])
         {
             v_idx = i;
             printf("Find a video stream, index %d\n", v_idx);
+            frame_rate = p_fmt_ctx->streams[i]->avg_frame_rate.num /
+                         p_fmt_ctx->streams[i]->avg_frame_rate.den;
             break;
         }
     }
@@ -290,7 +298,7 @@ int main(int argc, char *argv[])
     }
 
     // B5. 创建定时刷新事件线程，按照预设帧率产生刷新事件
-    sdl_thread = SDL_CreateThread(sdl_thread_handle_refreshing, NULL, NULL);
+    sdl_thread = SDL_CreateThread(sdl_thread_handle_refreshing, NULL, (void *)&frame_rate);
     if (sdl_thread == NULL)
     {  
         printf("SDL_CreateThread() failed: %s\n", SDL_GetError());  
