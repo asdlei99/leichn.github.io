@@ -3,8 +3,7 @@
  *
  * history:
  *   2018-11-27 - [lei]     Create file: a simplest ffmpeg player
- *   2018-11-29 - [lei]     Refresh decoding thread with SDL event
- *   2018-12-01 - [lei]     Play audio
+ *   2018-12-01 - [lei]     Playing audio
  *
  * details:
  *   A simple ffmpeg player.
@@ -29,12 +28,10 @@
 #include <SDL2/SDL_render.h>
 #include <SDL2/SDL_rect.h>
 
-#define SDL_USEREVENT_REFRESH  (SDL_USEREVENT + 1)
-
 #define SDL_AUDIO_BUFFER_SIZE 1024
 #define MAX_AUDIO_FRAME_SIZE 192000
 
-static bool s_file_finished = false;    // 文件读取完毕
+static bool s_input_finished = false;   // 文件读取完毕
 static bool s_decode_finished = false;  // 解码完毕
 
 typedef struct packet_queue_t
@@ -119,7 +116,7 @@ static int packet_queue_get(packet_queue_t *q, AVPacket *pkt, int block)
             ret = 1;
             break;
         }
-        else if (s_file_finished)   // 队列已空，文件已处理完
+        else if (s_input_finished)   // 队列已空，文件已处理完
         {
             ret = 0;
             break;
@@ -150,12 +147,12 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
     // 1. 从队列中读出一包音频数据
     if (packet_queue_get(&s_audio_pkt_queue, p_packet, 1) <= 0)
     {
-        if (s_file_finished)
+        if (s_input_finished)
         {
             // av_free(p_packet);
             av_packet_unref(p_packet);
             p_packet = NULL;    // flush decoder
-            printf("flush decoder\n");
+            printf("Flushing decoder...\n");
         }
         else
         {
@@ -169,6 +166,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
     if (ret != 0)
     {
         printf("avcodec_send_packet() failed %d\n", ret);
+        av_packet_unref(p_packet);
         return -1;
     }
 
@@ -182,7 +180,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
             if (ret == AVERROR_EOF)
             {
                 printf("audio avcodec_receive_frame(): the decoder has been fully flushed\n");
-                if (s_file_finished)
+                if (s_input_finished)
                 {
                     s_decode_finished = true;
                 }
@@ -224,10 +222,7 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         }
     }
 
-    if (p_packet->data != NULL)
-    {
-        av_packet_unref(p_packet);
-    }
+    av_packet_unref(p_packet);
 
     return ret_size;
 }
@@ -257,7 +252,7 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
             return;
         }
 
-        if (s_tx_idx >= s_audio_len)  // 
+        if (s_tx_idx >= s_audio_len)
         {   // audio_buf缓冲区中数据已全部取出，则从队列中获取更多数据
             get_size = audio_decode_frame(p_codec_ctx, s_audio_buf, sizeof(s_audio_buf));
             if(get_size < 0)
@@ -432,8 +427,8 @@ int main(int argc, char *argv[])
     }
 
     // B3. 暂停/继续音频回调处理。参数0表暂停。打开音频设备开始播放声音后应调用
-    // SDL_PauseAudio(0)，这样就可以在打开音频设备后为回调函数安全初始化数据
-    // 在暂停期间，会将静音值往音频设备写。
+    //     SDL_PauseAudio(0)，这样就可以在打开音频设备后为回调函数安全初始化数据
+    //     在暂停期间，会将静音值往音频设备写。
     SDL_PauseAudio(0);
 
     while (1)
@@ -444,20 +439,17 @@ int main(int argc, char *argv[])
         //                   若是帧长可变的格式则一个packet只包含一个frame
         while (av_read_frame(p_fmt_ctx, p_packet) == 0)
         {
-            //gettimeofday(&tvs, NULL);
             if (p_packet->stream_index == a_idx)
             {
-                //printf("[%ld.%06ld] Get a audio packet\n", tvs.tv_sec, tvs.tv_usec);
                 packet_queue_put(&s_audio_pkt_queue, p_packet);
             }
             else
             {
-                //printf("[%ld.%06ld] Drop a other packet\n", tvs.tv_sec, tvs.tv_usec);
                 av_packet_unref(p_packet);
             }
         }
         SDL_Delay(40);
-        s_file_finished = true;
+        s_input_finished = true;
         if (s_decode_finished)
         {
             SDL_Delay(1000);
