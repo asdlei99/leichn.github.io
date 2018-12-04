@@ -307,12 +307,6 @@ int main(int argc, char *argv[])
     AVCodec*            p_codec = NULL;
     AVPacket*           p_packet = NULL;
 
-    SDL_Window*         screen; 
-    SDL_Renderer*       sdl_renderer;
-    SDL_Texture*        sdl_texture;
-    SDL_Rect            sdl_rect;
-    SDL_Thread*         sdl_thread;
-    SDL_Event           sdl_event;
     SDL_AudioSpec       wanted_spec;
     SDL_AudioSpec       actual_spec;
 
@@ -430,7 +424,7 @@ int main(int argc, char *argv[])
     // 1) SDL提供两种使音频设备取得音频数据方法：
     //    a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据
     //    b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL
-    // 2) 音频设备打开后播放静音，SDL_PauseAudio(0);
+    // 2) 音频设备打开后播放静音，不启动回调，调用SDL_PauseAudio(0)后启动回调，开始正常播放音频
     wanted_spec.freq = p_codec_ctx->sample_rate;    // 采样率
     wanted_spec.format = AUDIO_S16SYS;              // S表带符号，16是采样深度，SYS表采用系统字节序
     wanted_spec.channels = p_codec_ctx->channels;   // 声音通道数
