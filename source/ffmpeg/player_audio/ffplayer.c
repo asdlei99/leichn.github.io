@@ -53,7 +53,7 @@ void packet_queue_init(packet_queue_t *q)
     q->cond = SDL_CreateCond();
 }
 // 写队列尾部。pkt是一包还未解码的音频数据
-int packet_queue_put(packet_queue_t *q, AVPacket *pkt) {
+int packet_queue_push(packet_queue_t *q, AVPacket *pkt) {
 
     AVPacketList *pkt_list;
     
@@ -92,7 +92,7 @@ int packet_queue_put(packet_queue_t *q, AVPacket *pkt) {
 }
 
 // 读队列头部。
-static int packet_queue_get(packet_queue_t *q, AVPacket *pkt, int block)
+static int packet_queue_pop(packet_queue_t *q, AVPacket *pkt, int block)
 {
     AVPacketList *p_pkt_node;
     int ret;
@@ -116,7 +116,7 @@ static int packet_queue_get(packet_queue_t *q, AVPacket *pkt, int block)
             ret = 1;
             break;
         }
-        else if (s_input_finished)   // 队列已空，文件已处理完
+        else if (s_input_finished)  // 队列已空，文件已处理完
         {
             ret = 0;
             break;
@@ -135,33 +135,15 @@ static int packet_queue_get(packet_queue_t *q, AVPacket *pkt, int block)
     return ret;
 }
 
-int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_size)
+int audio_decode_frame(AVCodecContext *p_codec_ctx, AVPacket *p_packet, uint8_t *audio_buf, int buf_size)
 {
-    AVPacket *p_packet = (AVPacket *)av_malloc(sizeof(AVPacket));
     AVFrame *p_frame = av_frame_alloc();
     
     int frm_size = 0;
     int ret_size = 0;
     int ret;
 
-    // 1. 从队列中读出一包音频数据
-    if (packet_queue_get(&s_audio_pkt_queue, p_packet, 1) <= 0)
-    {
-        if (s_input_finished)
-        {
-            // av_free(p_packet);
-            av_packet_unref(p_packet);
-            p_packet = NULL;    // flush decoder
-            printf("Flushing decoder...\n");
-        }
-        else
-        {
-            return -1;
-        }
-    }
-
-    // 2. 将音频包pkt解码成音频帧frame
-    // 2.1 向解码器喂数据，每次喂一个packet
+    // 1 向解码器喂数据，每次喂一个packet
     ret = avcodec_send_packet(p_codec_ctx, p_packet);
     if (ret != 0)
     {
@@ -173,18 +155,14 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
     ret_size = 0;
     while (1)
     {
-        // 2.2 接收解码器输出的数据，每次接收一个frame
+        // 2 接收解码器输出的数据，每次接收一个frame
         ret = avcodec_receive_frame(p_codec_ctx, p_frame);
         if (ret != 0)
         {
             if (ret == AVERROR_EOF)
             {
                 printf("audio avcodec_receive_frame(): the decoder has been fully flushed\n");
-                if (s_input_finished)
-                {
-                    s_decode_finished = true;
-                }
-                return -1;
+                return 0;
             }
             else if (ret == AVERROR(EAGAIN))
             {
@@ -222,8 +200,8 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, uint8_t *audio_buf, int buf_
         }
     }
 
-    av_packet_unref(p_packet);
-
+    av_frame_unref(p_frame);
+    
     return ret_size;
 }
 
@@ -245,7 +223,14 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
     static uint32_t s_audio_len = 0;    // 新取得的音频数据大小
     static uint32_t s_tx_idx = 0;       // 已发送给设备的数据量
 
-    while (len > 0)         // stream缓冲区填满，则此函数返回
+
+    AVPacket *p_packet;
+
+    int frm_size = 0;
+    int ret_size = 0;
+    int ret;
+
+    while (len > 0)         // 确保stream缓冲区填满，填满后此函数返回
     {
         if (s_decode_finished)
         {
@@ -254,18 +239,49 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
 
         if (s_tx_idx >= s_audio_len)
         {   // audio_buf缓冲区中数据已全部取出，则从队列中获取更多数据
-            get_size = audio_decode_frame(p_codec_ctx, s_audio_buf, sizeof(s_audio_buf));
-            if(get_size < 0)
+
+            p_packet = (AVPacket *)av_malloc(sizeof(AVPacket));
+            
+            // 1. 从队列中读出一包音频数据
+            if (packet_queue_pop(&s_audio_pkt_queue, p_packet, 1) <= 0)
+            {
+                if (s_input_finished)
+                {
+                    av_packet_unref(p_packet);
+                    p_packet = NULL;    // flush decoder
+                    printf("Flushing decoder...\n");
+                }
+                else
+                {
+                    av_packet_unref(p_packet);
+                    return;
+                }
+            }
+
+            // 2. 解码音频包
+            get_size = audio_decode_frame(p_codec_ctx, p_packet, s_audio_buf, sizeof(s_audio_buf));
+            if (get_size < 0)
             {
                 // 出错输出一段静音
                 s_audio_len = 1024; // arbitrary?
                 memset(s_audio_buf, 0, s_audio_len);
+                av_packet_unref(p_packet);
+            }
+            else if (get_size == 0) // 解码缓冲区被冲洗，整个解码过程完毕
+            {
+                s_decode_finished = true;
             }
             else
             {
                 s_audio_len = get_size;
+                av_packet_unref(p_packet);
             }
             s_tx_idx = 0;
+
+            if (p_packet->data != NULL)
+            {
+                //av_packet_unref(p_packet);
+            }
         }
 
         copy_len = s_audio_len - s_tx_idx;
@@ -314,7 +330,8 @@ int main(int argc, char *argv[])
     // 初始化libavformat(所有格式)，注册所有复用器/解复用器
     // av_register_all();   // 已被申明为过时的，直接不再使用即可
 
-    // A1. 打开视频文件：读取文件头，将文件格式信息存储在"fmt context"中
+    // A1. 构建AVFormatContext
+    // A1.1 打开视频文件：读取文件头，将文件格式信息存储在"fmt context"中
     ret = avformat_open_input(&p_fmt_ctx, argv[1], NULL, NULL);
     if (ret != 0)
     {
@@ -323,8 +340,8 @@ int main(int argc, char *argv[])
         goto exit0;
     }
 
-    // A2. 搜索流信息：读取一段视频文件数据，尝试解码，将取到的流信息填入pFormatCtx->streams
-    //     p_fmt_ctx->streams是一个指针数组，数组大小是pFormatCtx->nb_streams
+    // A1.2 搜索流信息：读取一段视频文件数据，尝试解码，将取到的流信息填入p_fmt_ctx->streams
+    //      p_fmt_ctx->streams是一个指针数组，数组大小是pFormatCtx->nb_streams
     ret = avformat_find_stream_info(p_fmt_ctx, NULL);
     if (ret < 0)
     {
@@ -336,7 +353,7 @@ int main(int argc, char *argv[])
     // 将文件相关信息打印在标准错误设备上
     av_dump_format(p_fmt_ctx, 0, argv[1], 0);
 
-    // A3. 查找第一个视频流和第一个音频流
+    // A2. 查找第一个音频流
     a_idx = -1;
     for (i=0; i<p_fmt_ctx->nb_streams; i++)
     {
@@ -354,12 +371,12 @@ int main(int argc, char *argv[])
         goto exit1;
     }
 
-    // A5. 为音频流构建解码器AVCodecContext
+    // A3. 为音频流构建解码器AVCodecContext
 
-    // A5.1 获取解码器参数AVCodecParameters
+    // A3.1 获取解码器参数AVCodecParameters
     p_codec_par = p_fmt_ctx->streams[a_idx]->codecpar;
 
-    // A5.2 获取解码器
+    // A3.2 获取解码器
     p_codec = avcodec_find_decoder(p_codec_par->codec_id);
     if (p_codec == NULL)
     {
@@ -368,11 +385,11 @@ int main(int argc, char *argv[])
         goto exit1;
     }
 
-    // A5.3 构建解码器AVCodecContext
-    // A5.3.1 p_codec_ctx初始化：分配结构体，使用p_codec初始化相应成员为默认值
+    // A3.3 构建解码器AVCodecContext
+    // A3.3.1 p_codec_ctx初始化：分配结构体，使用p_codec初始化相应成员为默认值
     p_codec_ctx = avcodec_alloc_context3(p_codec);
 
-    // A5.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
+    // A3.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
     if (ret < 0)
     {
@@ -381,7 +398,7 @@ int main(int argc, char *argv[])
         goto exit2;
     }
 
-    // A5.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
+    // A3.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
     ret = avcodec_open2(p_codec_ctx, p_codec, NULL);
     if (ret < 0)
     {
@@ -413,6 +430,7 @@ int main(int argc, char *argv[])
     // 1) SDL提供两种使音频设备取得音频数据方法：
     //    a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据
     //    b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL
+    // 2) 音频设备打开后播放静音，SDL_PauseAudio(0);
     wanted_spec.freq = p_codec_ctx->sample_rate;    // 采样率
     wanted_spec.format = AUDIO_S16SYS;              // S表带符号，16是采样深度，SYS表采用系统字节序
     wanted_spec.channels = p_codec_ctx->channels;   // 声音通道数
@@ -425,23 +443,23 @@ int main(int argc, char *argv[])
         printf("SDL_OpenAudio() failed: %s\n", SDL_GetError());
         goto exit3;
     }
-
-    // B3. 暂停/继续音频回调处理。参数0表暂停。打开音频设备开始播放声音后应调用
-    //     SDL_PauseAudio(0)，这样就可以在打开音频设备后为回调函数安全初始化数据
+    
+    // B3. 暂停/继续音频回调处理。参数1表暂停，0表继续。
+    //     打开音频设备后默认未启动回调处理，通过调用SDL_PauseAudio(0)来启动回调处理。
+    //     这样就可以在打开音频设备后先为回调函数安全初始化数据，一切就绪后再启动音频回调。
     //     在暂停期间，会将静音值往音频设备写。
     SDL_PauseAudio(0);
 
     while (1)
     {
-        // A6. 从视频文件中读取一个packet
-        //     此处packet包含音频数据
+        // A4. 从视频文件中读取一个packet，此处仅处理音频packet
         //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
         //                   若是帧长可变的格式则一个packet只包含一个frame
         while (av_read_frame(p_fmt_ctx, p_packet) == 0)
         {
             if (p_packet->stream_index == a_idx)
             {
-                packet_queue_put(&s_audio_pkt_queue, p_packet);
+                packet_queue_push(&s_audio_pkt_queue, p_packet);
             }
             else
             {
