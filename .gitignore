@@ -7,3 +7,6 @@
 *.vscode
 *.code-workspace
 *tags:
+lib/
+lib64/
+

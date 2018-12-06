@@ -24,9 +24,6 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_video.h>
-#include <SDL2/SDL_render.h>
-#include <SDL2/SDL_rect.h>
 
 #define SDL_AUDIO_BUFFER_SIZE 1024
 #define MAX_AUDIO_FRAME_SIZE 192000
@@ -383,7 +380,12 @@ int main(int argc, char *argv[])
     // A3.3 构建解码器AVCodecContext
     // A3.3.1 p_codec_ctx初始化：分配结构体，使用p_codec初始化相应成员为默认值
     p_codec_ctx = avcodec_alloc_context3(p_codec);
-
+    if (p_codec_ctx == NULL)
+    {
+        printf("avcodec_alloc_context3() failed %d\n", ret);
+        res = -1;
+        goto exit0;
+    }
     // A3.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
     if (ret < 0)
@@ -392,7 +394,6 @@ int main(int argc, char *argv[])
         res = -1;
         goto exit2;
     }
-
     // A3.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
     ret = avcodec_open2(p_codec_ctx, p_codec, NULL);
     if (ret < 0)
@@ -420,7 +421,6 @@ int main(int argc, char *argv[])
 
     packet_queue_init(&s_audio_pkt_queue);
 
-    // https://wiki.libsdl.org/SDL_AudioSpec
     // B2. 打开音频设备并创建音频处理线程。期望的参数是wanted_spec，实际得到的硬件参数是actual_spec
     // 1) SDL提供两种使音频设备取得音频数据方法：
     //    a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据

@@ -147,7 +147,12 @@ int main(int argc, char *argv[])
     // A5.3 构建解码器AVCodecContext
     // A5.3.1 p_codec_ctx初始化：分配结构体，使用p_codec初始化相应成员为默认值
     p_codec_ctx = avcodec_alloc_context3(p_codec);
-
+    if (p_codec_ctx == NULL)
+    {
+        printf("avcodec_alloc_context3() failed %d\n", ret);
+        res = -1;
+        goto exit1;
+    }
     // A5.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
     if (ret < 0)
@@ -156,7 +161,6 @@ int main(int argc, char *argv[])
         res = -1;
         goto exit2;
     }
-
     // A5.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
     ret = avcodec_open2(p_codec_ctx, p_codec, NULL);
     if (ret < 0)
@@ -235,7 +239,7 @@ int main(int argc, char *argv[])
     }
 
     // B1. 初始化SDL子系统：缺省(事件处理、文件IO、线程)、视频、音频、定时器
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER))
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER))
     {  
         printf("SDL_Init() failed: %s\n", SDL_GetError()); 
         res = -1;
@@ -244,7 +248,7 @@ int main(int argc, char *argv[])
 
     // B2. 创建SDL窗口，SDL 2.0支持多窗口
     //     SDL_Window即运行程序后弹出的视频窗口，同SDL 1.x中的SDL_Surface
-    screen = SDL_CreateWindow("Simplest ffmpeg player's Window", 
+    screen = SDL_CreateWindow("simple ffplayer", 
                               SDL_WINDOWPOS_UNDEFINED,// 不关心窗口X坐标
                               SDL_WINDOWPOS_UNDEFINED,// 不关心窗口Y坐标
                               p_codec_ctx->width, 
