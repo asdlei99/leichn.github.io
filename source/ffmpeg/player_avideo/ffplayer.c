@@ -31,7 +31,8 @@
 #define MAX_AUDIO_FRAME_SIZE 192000
 
 static bool s_input_finished = false;   // 文件读取完毕
-static bool s_decode_finished = false;  // 解码完毕
+static bool s_adecode_finished = false; // 解码完毕
+static bool s_vdecode_finished = false; // 解码完毕
 
 typedef struct packet_queue_t
 {
@@ -148,7 +149,27 @@ int audio_decode_frame(AVCodecContext *p_codec_ctx, AVPacket *p_packet, uint8_t 
     ret = avcodec_send_packet(p_codec_ctx, p_packet);
     if (ret != 0)
     {
-        printf("avcodec_send_packet() failed %d\n", ret);
+        if (ret == AVERROR_EOF)
+        {
+            printf("audio avcodec_send_packet(): the decoder has been flushed\n");
+        }
+        else if (ret == AVERROR(EAGAIN))
+        {
+            printf("audio avcodec_send_packet(): input is not accepted in the current state\n");
+        }
+        else if (ret == AVERROR(EINVAL))
+        {
+            printf("audio avcodec_send_packet(): codec not opened, it is an encoder, or requires flush\n");
+        }
+        else if (ret == AVERROR(ENOMEM))
+        {
+            printf("audio avcodec_send_packet(): failed to add packet to internal queue, or similar\n");
+        }
+        else
+        {
+            printf("audio avcodec_send_packet(): legitimate decoding errors\n");
+        }
+
         av_packet_unref(p_packet);
         return -1;
     }
@@ -232,7 +253,7 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
 
     while (len > 0)         // 确保stream缓冲区填满，填满后此函数返回
     {
-        if (s_decode_finished)
+        if (s_adecode_finished)
         {
             return;
         }
@@ -269,7 +290,7 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
             }
             else if (get_size == 0) // 解码缓冲区被冲洗，整个解码过程完毕
             {
-                s_decode_finished = true;
+                s_adecode_finished = true;
             }
             else
             {
@@ -321,8 +342,9 @@ int video_thread(void *arg)
     
     p_packet = (AVPacket *)av_malloc(sizeof(AVPacket));
 
-    // A6. 分配AVFrame
-    // A6.1 分配AVFrame结构，注意并不分配data buffer(即AVFrame.*data[])
+    printf("w %d, h %d\n", p_codec_ctx->width, p_codec_ctx->height);
+    // A1. 分配AVFrame
+    // A1.1 分配AVFrame结构，注意并不分配data buffer(即AVFrame.*data[])
     p_frm_raw = av_frame_alloc();
     if (p_frm_raw == NULL)
     {
@@ -338,7 +360,7 @@ int video_thread(void *arg)
         goto exit1;
     }
 
-    // A6.2 为AVFrame.*data[]手工分配缓冲区，用于存储sws_scale()中目的帧视频数据
+    // A1.2 为AVFrame.*data[]手工分配缓冲区，用于存储sws_scale()中目的帧视频数据
     //     p_frm_raw的data_buffer由av_read_frame()分配，因此不需手工分配
     //     p_frm_yuv的data_buffer无处分配，因此在此处手工分配
     buf_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, 
@@ -370,7 +392,7 @@ int video_thread(void *arg)
         goto exit3;
     }
 
-    // A7. 初始化SWS context，用于后续图像转换
+    // A2. 初始化SWS context，用于后续图像转换
     sws_ctx = sws_getContext(p_codec_ctx->width,    // src width
                              p_codec_ctx->height,   // src height
                              p_codec_ctx->pix_fmt,  // src format
@@ -389,7 +411,7 @@ int video_thread(void *arg)
         goto exit4;
     }
 
-    // B2. 创建SDL窗口，SDL 2.0支持多窗口
+    // B1. 创建SDL窗口，SDL 2.0支持多窗口
     //     SDL_Window即运行程序后弹出的视频窗口，同SDL 1.x中的SDL_Surface
     screen = SDL_CreateWindow("simple ffplayer", 
                               SDL_WINDOWPOS_UNDEFINED,// 不关心窗口X坐标
@@ -398,7 +420,6 @@ int video_thread(void *arg)
                               p_codec_ctx->height,
                               SDL_WINDOW_OPENGL
                               );
-
     if (screen == NULL)
     {  
         printf("SDL_CreateWindow() failed: %s\n", SDL_GetError());  
@@ -406,7 +427,7 @@ int video_thread(void *arg)
         goto exit5;
     }
 
-    // B3. 创建SDL_Renderer
+    // B2. 创建SDL_Renderer
     //     SDL_Renderer：渲染器
     sdl_renderer = SDL_CreateRenderer(screen, -1, 0);
     if (sdl_renderer == NULL)
@@ -416,7 +437,7 @@ int video_thread(void *arg)
         goto exit5;
     }
 
-    // B4. 创建SDL_Texture
+    // B3. 创建SDL_Texture
     //     一个SDL_Texture对应一帧YUV数据，同SDL 1.x中的SDL_Overlay
     sdl_texture = SDL_CreateTexture(sdl_renderer, 
                                     SDL_PIXELFORMAT_IYUV, 
@@ -431,6 +452,7 @@ int video_thread(void *arg)
         goto exit5;
     }
 
+    // B4. SDL_Rect赋值
     sdl_rect.x = 0;
     sdl_rect.y = 0;
     sdl_rect.w = p_codec_ctx->width;
@@ -438,12 +460,12 @@ int video_thread(void *arg)
 
     while (1)
     {
-        if (s_decode_finished)
+        if (s_vdecode_finished)
         {
             break;
         }
         
-        // 1. 从队列中读出一包视频数据
+        // A3. 从队列中读出一包视频数据
         if (packet_queue_pop(&s_video_pkt_queue, p_packet, 1) <= 0)
         {
             if (s_input_finished)
@@ -459,34 +481,27 @@ int video_thread(void *arg)
             }
         }
 
-        if (p_packet == NULL || p_packet->data == NULL)
-        {
-            printf("Why get a null packet\n");
-        }
-
-
-        // A9. 视频解码：packet ==> frame
-        // A9.1 向解码器喂数据，一个packet可能是一个视频帧或多个音频帧，此处音频帧已被上一句滤掉
+        // A4. 视频解码：packet ==> frame
+        // A4.1 向解码器喂数据，一个packet可能是一个视频帧或多个音频帧，此处音频帧已被上一句滤掉
         ret = avcodec_send_packet(p_codec_ctx, p_packet);
         if (ret != 0)
         {
             res = -1;
             if (ret == AVERROR_EOF)
             {
-                printf("video avcodec_send_packet(): 0\n");
-                s_decode_finished = true;
+                printf("video avcodec_send_packet(): the decoder has been flushed\n");
             }
             else if (ret == AVERROR(EAGAIN))
             {
-                printf("video avcodec_send_packet(): 1\n");
+                printf("video avcodec_send_packet(): input is not accepted in the current state\n");
             }
             else if (ret == AVERROR(EINVAL))
             {
-                printf("video avcodec_send_packet(): 2\n");
+                printf("video avcodec_send_packet(): codec not opened, it is an encoder, or requires flush\n");
             }
             else if (ret == AVERROR(ENOMEM))
             {
-                printf("video avcodec_send_packet(): 3\n");
+                printf("video avcodec_send_packet(): failed to add packet to internal queue, or similar\n");
             }
             else
             {
@@ -495,14 +510,14 @@ int video_thread(void *arg)
 
             goto exit5;
         }
-        // A9.2 接收解码器输出的数据，此处只处理视频帧，每次接收一个packet，将之解码得到一个frame
+        // A4.2 接收解码器输出的数据，此处只处理视频帧，每次接收一个packet，将之解码得到一个frame
         ret = avcodec_receive_frame(p_codec_ctx, p_frm_raw);
         if (ret != 0)
         {
             if (ret == AVERROR_EOF)
             {
                 printf("video avcodec_receive_frame(): the decoder has been fully flushed\n");
-                s_decode_finished = true;
+                s_vdecode_finished = true;
             }
             else if (ret == AVERROR(EAGAIN))
             {
@@ -521,7 +536,7 @@ int video_thread(void *arg)
             goto exit6;
         }
         
-        // A10. 图像转换：p_frm_raw->data ==> p_frm_yuv->data
+        // A5. 图像转换：p_frm_raw->data ==> p_frm_yuv->data
         // 将源图像中一片连续的区域经过处理后更新到目标图像对应区域，处理的图像区域必须逐行连续
         // plane: 如YUV有Y、U、V三个plane，RGB有R、G、B三个plane
         // slice: 图像中一片连续的行，必须是连续的，顺序由顶部到底部或由底部到顶部
@@ -537,7 +552,7 @@ int video_thread(void *arg)
                   p_frm_yuv->linesize                       // dst strides
                   );
         
-        // B7. 使用新的YUV像素数据更新SDL_Rect
+        // B5. 使用新的YUV像素数据更新SDL_Rect
         SDL_UpdateYUVTexture(sdl_texture,                   // sdl texture
                              &sdl_rect,                     // sdl rect
                              p_frm_yuv->data[0],            // y plane
@@ -548,7 +563,7 @@ int video_thread(void *arg)
                              p_frm_yuv->linesize[2]         // v pitch
                              );
         
-        // B8. 使用特定颜色清空当前渲染目标
+        // B6. 使用特定颜色清空当前渲染目标
         SDL_RenderClear(sdl_renderer);
         // B9. 使用部分图像数据(texture)更新当前渲染目标
         SDL_RenderCopy(sdl_renderer,                        // sdl renderer
@@ -557,13 +572,13 @@ int video_thread(void *arg)
                        &sdl_rect                            // dst rect
                        );
         
-        // B10. 执行渲染，更新屏幕显示
+        // B7. 执行渲染，更新屏幕显示
         SDL_RenderPresent(sdl_renderer);
         if (p_packet != NULL)
         {
             av_packet_unref(p_packet);
         }
-
+        SDL_Delay(1000);
     }
 
 exit6:
@@ -587,15 +602,13 @@ exit0:
 }
 
 
-int open_audio_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
+int open_audio_stream(AVFormatContext* p_fmt_ctx, AVCodecContext* p_codec_ctx, int steam_idx)
 {
-    AVCodecContext* p_codec_ctx = NULL;
     AVCodecParameters* p_codec_par = NULL;
     AVCodec* p_codec = NULL;
     SDL_AudioSpec wanted_spec;
     SDL_AudioSpec actual_spec;
     int ret;
-    int res;
 
     packet_queue_init(&s_audio_pkt_queue);
     
@@ -608,8 +621,7 @@ int open_audio_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     if (p_codec == NULL)
     {
         printf("Cann't find codec!\n");
-        res = -1;
-        goto exit0;
+        return -1;
     }
 
     // 1.3 构建解码器AVCodecContext
@@ -618,24 +630,21 @@ int open_audio_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     if (p_codec_ctx == NULL)
     {
         printf("avcodec_alloc_context3() failed %d\n", ret);
-        res = -1;
-        goto exit0;
+        return -1;
     }
     // 1.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
     if (ret < 0)
     {
         printf("avcodec_parameters_to_context() failed %d\n", ret);
-        res = -1;
-        goto exit1;
+        return -1;
     }
     // 1.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
     ret = avcodec_open2(p_codec_ctx, p_codec, NULL);
     if (ret < 0)
     {
         printf("avcodec_open2() failed %d\n", ret);
-        res = -1;
-        goto exit1;
+        return -1;
     }
     
     // 2. 打开音频设备并创建音频处理线程。期望的参数是wanted_spec，实际得到的硬件参数是actual_spec
@@ -653,7 +662,7 @@ int open_audio_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     if (SDL_OpenAudio(&wanted_spec, &actual_spec) < 0)
     {
         printf("SDL_OpenAudio() failed: %s\n", SDL_GetError());
-        goto exit1;
+        return -1;
     }
     
     // 3. 暂停/继续音频回调处理。参数1表暂停，0表继续。
@@ -662,17 +671,12 @@ int open_audio_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     //     在暂停期间，会将静音值往音频设备写。
     SDL_PauseAudio(0);
 
-    
-exit1:
-    avcodec_close(p_codec_ctx);
-exit0:
-    return res;
+    return 0;
 }
 
 
-int open_video_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
+int open_video_stream(AVFormatContext* p_fmt_ctx, AVCodecContext* p_codec_ctx, int steam_idx)
 {
-    AVCodecContext* p_codec_ctx = NULL;
     AVCodecParameters* p_codec_par = NULL;
     AVCodec* p_codec = NULL;
     SDL_Window* screen; 
@@ -685,7 +689,6 @@ int open_video_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     int i;
     int v_idx;
     int ret;
-    int res;
     int frame_rate;
 
     packet_queue_init(&s_video_pkt_queue);
@@ -699,8 +702,7 @@ int open_video_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     if (p_codec == NULL)
     {
         printf("Cann't find codec!\n");
-        res = -1;
-        goto exit0;
+        return -1;
     }
 
     // 1.3 构建解码器AVCodecContext
@@ -709,40 +711,35 @@ int open_video_stream(AVFormatContext* p_fmt_ctx, int steam_idx)
     if (p_codec_ctx == NULL)
     {
         printf("avcodec_alloc_context3() failed %d\n", ret);
-        res = -1;
-        goto exit0;
+        return -1;
     }
     // 1.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
     if (ret < 0)
     {
         printf("avcodec_parameters_to_context() failed %d\n", ret);
-        res = -1;
-        goto exit1;
+        return -1;
     }
     // 1.3.3 p_codec_ctx初始化：使用p_codec初始化p_codec_ctx，初始化完成
     ret = avcodec_open2(p_codec_ctx, p_codec, NULL);
     if (ret < 0)
     {
         printf("avcodec_open2() failed %d\n", ret);
-        res = -1;
-        goto exit1;
+        return -1;
     }
 
     // 2. 创建解码线程
     SDL_CreateThread(video_thread, "video thread", p_codec_ctx);
 
-exit1:
-    avcodec_close(p_codec_ctx);
-exit0:
-    return res;
-
+    return 0;
 }
 
 int main(int argc, char *argv[])
 {
     // Initalizing these to NULL prevents segfaults!
     AVFormatContext* p_fmt_ctx = NULL;
+    AVCodecContext* p_acodec_ctx = NULL;
+    AVCodecContext* p_vcodec_ctx = NULL;
     AVPacket*  p_packet = NULL;
     int i = 0;
     int a_idx = -1;
@@ -801,8 +798,7 @@ int main(int argc, char *argv[])
             a_idx = i;
             printf("Find a audio stream, index %d\n", a_idx);
             // A3. 打开音频流
-            open_audio_stream(p_fmt_ctx, a_idx);
-            break;
+            open_audio_stream(p_fmt_ctx, p_acodec_ctx, a_idx);
         }
         if ((p_fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
             (v_idx == -1))
@@ -810,10 +806,8 @@ int main(int argc, char *argv[])
             v_idx = i;
             printf("Find a video stream, index %d\n", v_idx);
             // A3. 打开视频流
-            open_video_stream(p_fmt_ctx, v_idx);
-            break;
+            open_video_stream(p_fmt_ctx, p_vcodec_ctx, v_idx);
         }
-
     }
     if (a_idx == -1 && v_idx == -1)
     {
@@ -830,38 +824,38 @@ int main(int argc, char *argv[])
         goto exit2;
     }
 
-    while (1)
+    // A4. 从视频文件中读取一个packet，压入音频或视频队列
+    //     packet可能是视频帧、音频帧或其他数据，解码器只会解码视频帧或音频帧，非音视频数据并不会被
+    //     扔掉、从而能向解码器提供尽可能多的信息
+    //     对于视频来说，一个packet只包含一个frame
+    //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
+    //                   若是帧长可变的格式则一个packet只包含一个frame
+    while (av_read_frame(p_fmt_ctx, p_packet) == 0)
     {
-        // A4. 从视频文件中读取一个packet，压入音频或视频队列
-        //     packet可能是视频帧、音频帧或其他数据，解码器只会解码视频帧或音频帧，非音视频数据并不会被
-        //     扔掉、从而能向解码器提供尽可能多的信息
-        //     对于视频来说，一个packet只包含一个frame
-        //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
-        //                   若是帧长可变的格式则一个packet只包含一个frame
-        while (av_read_frame(p_fmt_ctx, p_packet) == 0)
+        if (p_packet->stream_index == a_idx)
         {
-            if (p_packet->stream_index == a_idx)
-            {
-                packet_queue_push(&s_audio_pkt_queue, p_packet);
-            }
-            else if (p_packet->stream_index == v_idx)
-            {
-                packet_queue_push(&s_video_pkt_queue, p_packet);
-                printf("pv\n");
-            }
-            else
-            {
-                av_packet_unref(p_packet);
-            }
+            packet_queue_push(&s_audio_pkt_queue, p_packet);
+            printf("av\n");
         }
-        SDL_Delay(40);
-        s_input_finished = true;
-        if (s_decode_finished)
+        else if (p_packet->stream_index == v_idx)
         {
-            SDL_Delay(1000);
-            break;
+            packet_queue_push(&s_video_pkt_queue, p_packet);
+            printf("pv\n");
+        }
+        else
+        {
+            av_packet_unref(p_packet);
         }
     }
+    SDL_Delay(40);
+    s_input_finished = true;
+
+    while ((!s_adecode_finished) || (!s_vdecode_finished))
+    {
+        SDL_Delay(1000);
+    }
+
+    SDL_Delay(1000);
 
 exit3:
     SDL_Quit();

@@ -441,7 +441,7 @@ exit4:
 exit3:
     av_frame_free(&p_frm_raw);
 exit2:
-    avcodec_close(p_codec_ctx);
+    avcodec_free_context(p_codec_ctx);
 exit1:
     avformat_close_input(&p_fmt_ctx);
 exit0:

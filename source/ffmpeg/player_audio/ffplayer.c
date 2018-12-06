@@ -384,7 +384,7 @@ int main(int argc, char *argv[])
     {
         printf("avcodec_alloc_context3() failed %d\n", ret);
         res = -1;
-        goto exit0;
+        goto exit1;
     }
     // A3.3.2 p_codec_ctx初始化：p_codec_par ==> p_codec_ctx，初始化相应成员
     ret = avcodec_parameters_to_context(p_codec_ctx, p_codec_par);
@@ -416,7 +416,7 @@ int main(int argc, char *argv[])
     {  
         printf("SDL_Init() failed: %s\n", SDL_GetError()); 
         res = -1;
-        goto exit2;
+        goto exit3;
     }
 
     packet_queue_init(&s_audio_pkt_queue);
@@ -436,7 +436,7 @@ int main(int argc, char *argv[])
     if (SDL_OpenAudio(&wanted_spec, &actual_spec) < 0)
     {
         printf("SDL_OpenAudio() failed: %s\n", SDL_GetError());
-        goto exit3;
+        goto exit4;
     }
     
     // B3. 暂停/继续音频回调处理。参数1表暂停，0表继续。
@@ -445,35 +445,36 @@ int main(int argc, char *argv[])
     //     在暂停期间，会将静音值往音频设备写。
     SDL_PauseAudio(0);
 
-    while (1)
+    // A4. 从视频文件中读取一个packet，此处仅处理音频packet
+    //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
+    //                   若是帧长可变的格式则一个packet只包含一个frame
+    while (av_read_frame(p_fmt_ctx, p_packet) == 0)
     {
-        // A4. 从视频文件中读取一个packet，此处仅处理音频packet
-        //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
-        //                   若是帧长可变的格式则一个packet只包含一个frame
-        while (av_read_frame(p_fmt_ctx, p_packet) == 0)
+        if (p_packet->stream_index == a_idx)
         {
-            if (p_packet->stream_index == a_idx)
-            {
-                packet_queue_push(&s_audio_pkt_queue, p_packet);
-            }
-            else
-            {
-                av_packet_unref(p_packet);
-            }
+            packet_queue_push(&s_audio_pkt_queue, p_packet);
         }
-        SDL_Delay(40);
-        s_input_finished = true;
-        if (s_decode_finished)
+        else
         {
-            SDL_Delay(1000);
-            break;
+            av_packet_unref(p_packet);
         }
     }
+    SDL_Delay(40);
+    s_input_finished = true;
 
-exit3:
+    // A5. 等待解码结束
+    while (!s_decode_finished)
+    {
+        SDL_Delay(1000);
+    }
+    SDL_Delay(1000);
+
+exit4:
     SDL_Quit();
-exit2:
+exit3:
     av_packet_unref(p_packet);
+exit2:
+    avcodec_free_context(p_codec_ctx);
 exit1:
     avformat_close_input(&p_fmt_ctx);
 exit0:
