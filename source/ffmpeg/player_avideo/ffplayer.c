@@ -26,6 +26,11 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_video.h>
+#include <SDL2/SDL_render.h>
+#include <SDL2/SDL_rect.h>
+
+#define SDL_USEREVENT_REFRESH  (SDL_USEREVENT + 1)
 
 #define SDL_AUDIO_BUFFER_SIZE 1024
 #define MAX_AUDIO_FRAME_SIZE 192000
@@ -270,7 +275,7 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
                 {
                     av_packet_unref(p_packet);
                     p_packet = NULL;    // flush decoder
-                    printf("Flushing decoder...\n");
+                    printf("Flushing audio decoder...\n");
                 }
                 else
                 {
@@ -319,6 +324,16 @@ void audio_callback(void *userdata, uint8_t *stream, int len)
     }
 }
 
+// 通过interval参数传入当前的timer interval，返回下一次timer的interval，返回0表示取消定时器
+// 定时器超时时间到时调用此回调函数，产生FF_REFRESH_EVENT事件，添加到事件队列
+static uint32_t sdl_time_cb_refresh(uint32_t interval, void *opaque)
+{
+    SDL_Event sdl_event;
+    sdl_event.type = SDL_USEREVENT_REFRESH;
+    SDL_PushEvent(&sdl_event);  // 将事件添加到事件队列，此队列可读可写
+    return interval;            // 返回0表示停止定时器 
+}
+
 // 将视频包解码得到视频帧，然后写入picture队列
 int video_thread(void *arg)
 {
@@ -342,7 +357,6 @@ int video_thread(void *arg)
     
     p_packet = (AVPacket *)av_malloc(sizeof(AVPacket));
 
-    printf("w %d, h %d\n", p_codec_ctx->width, p_codec_ctx->height);
     // A1. 分配AVFrame
     // A1.1 分配AVFrame结构，注意并不分配data buffer(即AVFrame.*data[])
     p_frm_raw = av_frame_alloc();
@@ -578,6 +592,8 @@ int video_thread(void *arg)
         {
             av_packet_unref(p_packet);
         }
+
+        SDL_WaitEvent(&sdl_event);
         SDL_Delay(1000);
     }
 
@@ -686,16 +702,13 @@ int open_video_stream(AVFormatContext* p_fmt_ctx, AVCodecContext* p_codec_ctx, i
     SDL_Thread* sdl_thread;
     SDL_Event sdl_event;
 
-    int i;
-    int v_idx;
     int ret;
-    int frame_rate;
 
     packet_queue_init(&s_video_pkt_queue);
 
     // 1. 为视频流构建解码器AVCodecContext
     // 1.1 获取解码器参数AVCodecParameters
-    p_codec_par = p_fmt_ctx->streams[v_idx]->codecpar;
+    p_codec_par = p_fmt_ctx->streams[steam_idx]->codecpar;
 
     // 1.2 获取解码器
     p_codec = avcodec_find_decoder(p_codec_par->codec_id);
@@ -727,8 +740,18 @@ int open_video_stream(AVFormatContext* p_fmt_ctx, AVCodecContext* p_codec_ctx, i
         printf("avcodec_open2() failed %d\n", ret);
         return -1;
     }
+    
+    int temp_num = p_fmt_ctx->streams[steam_idx]->avg_frame_rate.num;
+    int temp_den = p_fmt_ctx->streams[steam_idx]->avg_frame_rate.den;
+    int frame_rate = (temp_den > 0) ? temp_num/temp_den : 25;
+    int interval = (temp_num > 0) ? (temp_den*1000)/temp_num : 40;
 
-    // 2. 创建解码线程
+    printf("frame rate %d FPS, refresh interval %d ms\n", frame_rate, interval);
+
+    // 2. 创建视频解码定时刷新线程，此线程为SDL内部线程，调用指定的回调函数
+    SDL_AddTimer(interval, sdl_time_cb_refresh, NULL);
+
+    // 3. 创建视频解码线程
     SDL_CreateThread(video_thread, "video thread", p_codec_ctx);
 
     return 0;
@@ -828,19 +851,17 @@ int main(int argc, char *argv[])
     //     packet可能是视频帧、音频帧或其他数据，解码器只会解码视频帧或音频帧，非音视频数据并不会被
     //     扔掉、从而能向解码器提供尽可能多的信息
     //     对于视频来说，一个packet只包含一个frame
-    //     对于音频来说，若是帧长固定的格式则一个packet可包含整数个frame，
+    //     对于音频来说，若是帧长固定的格式则一个packet可包含多个(完整)frame，
     //                   若是帧长可变的格式则一个packet只包含一个frame
     while (av_read_frame(p_fmt_ctx, p_packet) == 0)
     {
         if (p_packet->stream_index == a_idx)
         {
             packet_queue_push(&s_audio_pkt_queue, p_packet);
-            printf("av\n");
         }
         else if (p_packet->stream_index == v_idx)
         {
             packet_queue_push(&s_video_pkt_queue, p_packet);
-            printf("pv\n");
         }
         else
         {
@@ -852,10 +873,10 @@ int main(int argc, char *argv[])
 
     while ((!s_adecode_finished) || (!s_vdecode_finished))
     {
-        SDL_Delay(1000);
+        SDL_Delay(100);
     }
 
-    SDL_Delay(1000);
+    SDL_Delay(200);
 
 exit3:
     SDL_Quit();
