@@ -1,7 +1,7 @@
 # Site settings
 title: leisure blog
 SEOTitle: 谁的博客
-header-img: img/common/post-bg-desk.jpg
+header-img: img/post-bg-desk.jpg
 # email: lei.huang.chn@gmail.com
 description: "Every failure is leading towards success."
 keyword: "leisure, Linux"
@@ -12,7 +12,7 @@ github_repo: "https://github.com/leihl/heihl.github.io.git" # you code repositor
 # Sidebar settings
 sidebar: true                           # whether or not using Sidebar.
 sidebar-about-description: "Goals determine what you going to be!"
-sidebar-avatar: /img/common/boy.jpg     # use absolute URL, seeing it's used in both `/` and `/about/`
+sidebar-avatar: /img/boy.jpg            # use absolute URL, seeing it's used in both `/` and `/about/`
 
 
 # SNS settings
