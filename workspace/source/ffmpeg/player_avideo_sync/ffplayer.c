@@ -825,10 +825,10 @@ int main(int argc, char *argv[])
         if ((p_fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
             (v_idx == -1))
         {
-            v_idx = i;
+            //v_idx = i;
             printf("Find a video stream, index %d\n", v_idx);
             // A3. 打开视频流
-            open_video_stream(p_fmt_ctx, p_vcodec_ctx, v_idx);
+            //open_video_stream(p_fmt_ctx, p_vcodec_ctx, v_idx);
         }
         if (a_idx != -1 && v_idx != -1)
         {
@@ -880,8 +880,6 @@ int main(int argc, char *argv[])
     {
         SDL_Delay(100);
     }
-
-    SDL_Delay(200);
 
 exit3:
     SDL_Quit();
