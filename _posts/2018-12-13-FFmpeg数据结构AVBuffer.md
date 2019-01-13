@@ -1,3 +1,5 @@
+本文基于FFmpeg 4.1版本。  
+
 AVBuffer是FFmpeg中很常用的一种缓冲区，缓冲区使用引用计数(reference-counted)机制。  
 AVBufferRef则对AVBuffer缓冲区提供了一层封装，最主要的是作引用计数处理，实现了一种安全机制。用户不应直接访问AVBuffer，应通过AVBufferRef来访问AVBuffer，以保证安全。  
 FFmpeg中很多基础的数据结构都包含了AVBufferRef成员，来间接使用AVBuffer缓冲区。  
@@ -6,7 +8,7 @@ FFmpeg中很多基础的数据结构都包含了AVBufferRef成员，来间接使
 AVBuffer和AVBufferRef结构体定义及操作函数位于libavutil中的buffer.h、buffer_internal.h、buffer.c三个文件中。需要关注的要点是**AVBufferRef和AVBuffer的关系**以及**缓冲区引用计数的概念**。  
 ## 1. 数据结构定义  
 ### 1.1 struct AVBuffer  
-struct AVBuffer定义于buffer_internal.h  
+struct AVBuffer定义于“libavutil/buffer_internal.h”，buffer_internal.h位于FFmpeg工程源码中，而FFmpeg提供的开发库头文件中并无此文件，因此这是一个内部数据结构，不向用户开放，用户不应直接访问AVBuffer，应通过AVBufferRef来访问AVBuffer，以保证安全。  
 ```c
 struct AVBuffer {
     uint8_t *data; /**< data described by this buffer */

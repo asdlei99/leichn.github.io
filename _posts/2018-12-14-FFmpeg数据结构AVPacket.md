@@ -1,10 +1,30 @@
+本文基于FFmpeg 4.1版本。  
+
 ## 1. 数据结构定义  
-struct AVPacket定义于avcodec.h  
+struct AVPacket定义于<libavcodec/avcodec.h>  
 ```c  
 struct AVPacket packet;
 ```
-AVPacket中存储的是经过编码的压缩数据。在解码中，AVPacket由解复用器输出到解码器。在编码中，AVPacket由编码器输出到复用器。如下图：  
+AVPacket中存储的是经过编码的压缩数据。在解码中，AVPacket由解复用器输出到解码器；在编码中，AVPacket由编码器输出到复用器。下图中，解复用器(demuxer)的输出和复用器(muxer)的输入“encoded data packets”的数据类型就是AVPacket：  
+<pre>
+ _______              ______________
+|       |            |              |
+| input |  demuxer   | encoded data |   decoder
+| file  | ---------> | packets      | -----+
+|_______|            |______________|      |
+                                           v
+                                       _________
+                                      |         |
+                                      | decoded |
+                                      | frames  |
+                                      |_________|
+ ________             ______________       |
+|        |           |              |      |
+| output | <-------- | encoded data | <----+
+| file   |   muxer   | packets      |   encoder
+|________|           |______________|
 
+</pre>
 
 对于视频而言，一个AVPacket通常只包含一个压缩视频帧。而对于音频而言，一个AVPacket可能包含多个完整的音频压缩帧。AVPacket也可以不包含压缩编码数据，而只包含side data，这种包可以称为空packet。例如，编码结束后只需要更新一些参数时就可以发空packet。  
 
@@ -165,7 +185,7 @@ fail:
 ```
 av_packet_ref()作了处理如下:  
 a) 如果src->buf为NULL，则将src缓冲区拷贝到新创建的dst缓冲区，注意src缓冲区不支持引用计数，但新建的dst缓冲区是支持引用计数的，因为dst->buf不为NULL。  
-b) 如果src->buf不为空，则dst与src共用缓冲区，调用`av_buffer_ref()`增加缓冲区引用计数即可。`av_buffer_ref()`分析参考“[ffmpeg数据结构AVBuffer]()”  
+b) 如果src->buf不为空，则dst与src共用缓冲区，调用`av_buffer_ref()`增加缓冲区引用计数即可。`av_buffer_ref()`分析参考“[FFmpeg数据结构AVBuffer]()”  
 
 ### 2.2 av_packet_unref()  
 ```c
@@ -179,7 +199,7 @@ void av_packet_unref(AVPacket *pkt)
 }
 ```
 `av_packet_unref()`注销`AVPacket *pkt`对象，并调用`av_buffer_unref(&pkt->buf);`将缓冲区引用计数减1。  
-`av_buffer_unref()`中将缓冲区引用计数减1后，若缓冲区引用计数变成0，则回收缓冲区内存。`av_buffer_unref()`分析参考“[ffmpeg数据结构AVBuffer]()”  
+`av_buffer_unref()`中将缓冲区引用计数减1后，若缓冲区引用计数变成0，则回收缓冲区内存。`av_buffer_unref()`分析参考“[FFmpeg数据结构AVBuffer]()”  
 
 ## 3. 参考资料  
 [1] [FFmpeg数据结构：AVPacket解析](https://www.cnblogs.com/wangguchangqing/p/5790705.html), <https://www.cnblogs.com/wangguchangqing/p/5790705.html>  
