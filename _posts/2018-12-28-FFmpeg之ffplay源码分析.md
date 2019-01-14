@@ -207,7 +207,8 @@ typedef struct PacketQueue {
     SDL_cond *cond;
 } PacketQueue;
 ```
-
+栈(LIFO)是一种表，队列(FIFO)也是一种表。数组是表的一种实现方式，链表也是表的一种实现方式，例如FIFO既可以用数组实现，也可以用链表实现。PacketQueue是用链表实现的一个FIFO。
+  
 #### 2.2.4 struct FrameQueue  
 ```c  
 typedef struct FrameQueue {
@@ -223,6 +224,7 @@ typedef struct FrameQueue {
     PacketQueue *pktq;              // 指向对应的packet_queue
 } FrameQueue;
 ```
+FrameQueue是一个环形缓冲区(ring buffer)，是用数组实现的一个FIFO。  
 
 ### 2.3 主线程  
 **主线程主要实现三项功能：视频播放(音视频同步)、字幕播放、SDL消息处理。**  
