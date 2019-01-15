@@ -402,7 +402,7 @@ static void video_refresh(void *opaque, double *remaining_time)
 假设某次进入`video_refresh()`的时刻为T0，下次进入的时刻为T1。在T0时刻，读队列的步骤如下：  
 1) rindex(图中ri)表示上一次播放的帧lastvp，本次调用`video_refresh()`中，lastvp会被删除，rindex会加1  
 2) rindex+rindex_shown(图中ris)表示本次待播放的帧vp，本次调用`video_refresh()`中，vp会被读出播放  
-图中已播放的帧是灰色方框，本次待播放的帧是黑色方框，其他未播放的帧是蓝色方框，队列中空位置为白色方框。  
+图中已播放的帧是灰色方框，本次待播放的帧是黑色方框，其他未播放的帧是绿色方框，队列中空位置为白色方框。  
 在之后的某一时刻TX，首先调用`frame_queue_nb_remaining()`判断是否有帧未播放，若无待播放帧，函数`video_refresh()`直接返回，不往下执行。  
 ```c  
 /* return the number of undisplayed frames in the queue */
@@ -842,319 +842,10 @@ stream_component_open() -->
     audio_open(is, channel_layout, nb_channels, sample_rate, &is->audio_tgt);
     decoder_start(&is->auddec, audio_thread, is);
 ```
-audio_open()函数填入期望的音频参数，打开音频设备后，将实际的音频参数存入输出参数is->audio_tgt中，后面音频播放线程用会用到此参数，使用此参数将原始音频数据重采样，转换为音频设备支持的格式。  
-```c
-static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb_channels, int wanted_sample_rate, struct AudioParams *audio_hw_params)
-{
-    SDL_AudioSpec wanted_spec, spec;
-    const char *env;
-    static const int next_nb_channels[] = {0, 0, 1, 6, 2, 6, 4, 6};
-    static const int next_sample_rates[] = {0, 44100, 48000, 96000, 192000};
-    int next_sample_rate_idx = FF_ARRAY_ELEMS(next_sample_rates) - 1;
+audio_open()函数填入期望的音频参数，打开音频设备后，将实际的音频参数存入输出参数is->audio_tgt中，后面音频播放线程用会用到此参数。  
+音频格式的各参数与重采样强相关，audio_open()的详细实现在后面第5节讲述。  
 
-    env = SDL_getenv("SDL_AUDIO_CHANNELS");
-    if (env) {  // 若环境变量有设置，优先从环境变量取得声道数和声道布局
-        wanted_nb_channels = atoi(env);
-        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
-    }
-    if (!wanted_channel_layout || wanted_nb_channels != av_get_channel_layout_nb_channels(wanted_channel_layout)) {
-        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
-        wanted_channel_layout &= ~AV_CH_LAYOUT_STEREO_DOWNMIX;
-    }
-    // 根据channel_layout获取nb_channels，当传入参数wanted_nb_channels不匹配时，此处会作修正
-    wanted_nb_channels = av_get_channel_layout_nb_channels(wanted_channel_layout);
-    wanted_spec.channels = wanted_nb_channels;  // 声道数
-    wanted_spec.freq = wanted_sample_rate;      // 采样率
-    if (wanted_spec.freq <= 0 || wanted_spec.channels <= 0) {
-        av_log(NULL, AV_LOG_ERROR, "Invalid sample rate or channel count!\n");
-        return -1;
-    }
-    while (next_sample_rate_idx && next_sample_rates[next_sample_rate_idx] >= wanted_spec.freq)
-        next_sample_rate_idx--;     // 从采样率数组中找到第一个不大于传入参数wanted_sample_rate的值
-    // 音频采样格式有两大类型：planar和packed，假设一个双声道音频文件，一个左声道采样点记作L，一个右声道采样点记作R，则：
-    // planar存储格式：(plane1)LLLLLLLL...LLLL (plane2)RRRRRRRR...RRRR
-    // packed存储格式：(plane1)LRLRLRLR...........................LRLR
-    // 在这两种采样类型下，又细分多种采样格式，如AV_SAMPLE_FMT_S16、AV_SAMPLE_FMT_S16P等，注意SDL2.0目前不支持planar格式
-    // channel_layout是int64_t类型，表示音频声道布局，每bit代表一个特定的声道，参考channel_layout.h中的定义，一目了然
-    // 数据量(bits/秒) = 采样率(Hz) * 采样深度(bit) * 声道数
-    wanted_spec.format = AUDIO_S16SYS;          // 采样格式：S表带符号，16是采样深度(位深)，SYS表采用系统字节序，这个宏在SDL中定义
-    wanted_spec.silence = 0;                    // 静音值
-    wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));   // SDL声音缓冲区尺寸，单位是单声道采样点尺寸x声道数
-    wanted_spec.callback = sdl_audio_callback;  // 回调函数，若为NULL，则应使用SDL_QueueAudio()机制
-    wanted_spec.userdata = opaque;              // 提供给回调函数的参数
-    // 打开音频设备并创建音频处理线程。期望的参数是wanted_spec，实际得到的硬件参数是spec
-    // 1) SDL提供两种使音频设备取得音频数据方法：
-    //    a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据
-    //    b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL
-    // 2) 音频设备打开后播放静音，不启动回调，调用SDL_PauseAudio(0)后启动回调，开始正常播放音频
-    // SDL_OpenAudioDevice()第一个参数为NULL时，等价于SDL_OpenAudio()
-    while (!(audio_dev = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE))) {
-        av_log(NULL, AV_LOG_WARNING, "SDL_OpenAudio (%d channels, %d Hz): %s\n",
-               wanted_spec.channels, wanted_spec.freq, SDL_GetError());
-        // 如果打开音频设备失败，则尝试用不同的声道数或采样率再试打开音频设备，这里有些奇怪，暂不深究
-        wanted_spec.channels = next_nb_channels[FFMIN(7, wanted_spec.channels)];
-        if (!wanted_spec.channels) {
-            wanted_spec.freq = next_sample_rates[next_sample_rate_idx--];
-            wanted_spec.channels = wanted_nb_channels;
-            if (!wanted_spec.freq) {
-                av_log(NULL, AV_LOG_ERROR,
-                       "No more combinations to try, audio open failed\n");
-                return -1;
-            }
-        }
-        wanted_channel_layout = av_get_default_channel_layout(wanted_spec.channels);
-    }
-    // 检查打开音频设备的实际参数：采样格式
-    if (spec.format != AUDIO_S16SYS) {
-        av_log(NULL, AV_LOG_ERROR,
-               "SDL advised audio format %d is not supported!\n", spec.format);
-        return -1;
-    }
-    // 检查打开音频设备的实际参数：声道数
-    if (spec.channels != wanted_spec.channels) {
-        wanted_channel_layout = av_get_default_channel_layout(spec.channels);
-        if (!wanted_channel_layout) {
-            av_log(NULL, AV_LOG_ERROR,
-                   "SDL advised channel count %d is not supported!\n", spec.channels);
-            return -1;
-        }
-    }
-
-    // wanted_spec是期望的参数，spec是实际的参数，wanted_spec和spec都是SDL中的结构。
-    // 此处audio_hw_params是FFmpeg中的参数，输出参数供上级函数使用
-    audio_hw_params->fmt = AV_SAMPLE_FMT_S16;
-    audio_hw_params->freq = spec.freq;
-    audio_hw_params->channel_layout = wanted_channel_layout;
-    audio_hw_params->channels =  spec.channels;
-    audio_hw_params->frame_size = av_samples_get_buffer_size(NULL, audio_hw_params->channels, 1, audio_hw_params->fmt, 1);
-    audio_hw_params->bytes_per_sec = av_samples_get_buffer_size(NULL, audio_hw_params->channels, audio_hw_params->freq, audio_hw_params->fmt, 1);
-    if (audio_hw_params->bytes_per_sec <= 0 || audio_hw_params->frame_size <= 0) {
-        av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size failed\n");
-        return -1;
-    }
-    return spec.size;
-}
-```
-打开音频设备，涉及到FFmpeg中音频存储的基础概念，为稍显清晰，将相关注释摘抄如下：  
-**[1]. 音频格式相关**  
-     **planar&packed**  
-     音频采样格式有两大类型：planar和packed，假设一个双声道音频文件，一个左声道采样点记作L，一个右声道采样点记作R，则：  
-     planar存储格式：(plane1)LLLLLLLL...LLLL (plane2)RRRRRRRR...RRRR  
-     packed存储格式：(plane1)LRLRLRLR...........................LRLR  
-     在这两种采样类型下，又细分多种采样格式，如AV_SAMPLE_FMT_S16、AV_SAMPLE_FMT_S16P等，注意SDL2.0目前不支持planar格式  
-
-     SDL中定义音频参数数据结构定义如下：  
-```c  
-/**
- *  The calculated values in this structure are calculated by SDL_OpenAudio().
- *
- *  For multi-channel audio, the default SDL channel mapping is:
- *  2:  FL FR                       (stereo)
- *  3:  FL FR LFE                   (2.1 surround)
- *  4:  FL FR BL BR                 (quad)
- *  5:  FL FR FC BL BR              (quad + center)
- *  6:  FL FR FC LFE SL SR          (5.1 surround - last two can also be BL BR)
- *  7:  FL FR FC LFE BC SL SR       (6.1 surround)
- *  8:  FL FR FC LFE BL BR SL SR    (7.1 surround)
- */
-typedef struct SDL_AudioSpec
-{
-    int freq;                   /**< DSP frequency -- samples per second */
-    SDL_AudioFormat format;     /**< Audio data format */
-    Uint8 channels;             /**< Number of channels: 1 mono, 2 stereo */
-    Uint8 silence;              /**< Audio buffer silence value (calculated) */
-    Uint16 samples;             /**< Audio buffer size in sample FRAMES (total samples divided by channel count) */
-    Uint16 padding;             /**< Necessary for some compile environments */
-    Uint32 size;                /**< Audio buffer size in bytes (calculated) */
-    SDL_AudioCallback callback; /**< Callback that feeds the audio device (NULL to use SDL_QueueAudio()). */
-    void *userdata;             /**< Userdata passed to callback (ignored for NULL callbacks). */
-} SDL_AudioSpec;
-```
-
-    SDL音频格式定义如下：  
-```c  
-/**
- *  \brief Audio format flags.
- *
- *  These are what the 16 bits in SDL_AudioFormat currently mean...
- *  (Unspecified bits are always zero).
- *
- *  \verbatim
-    ++-----------------------sample is signed if set
-    ||
-    ||       ++-----------sample is bigendian if set
-    ||       ||
-    ||       ||          ++---sample is float if set
-    ||       ||          ||
-    ||       ||          || +---sample bit size---+
-    ||       ||          || |                     |
-    15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
-    \endverbatim
- *
- *  There are macros in SDL 2.0 and later to query these bits.
- */
-typedef Uint16 SDL_AudioFormat;
-
-/**
- *  \name Audio format flags
- *
- *  Defaults to LSB byte order.
- */
-/* @{ */
-#define AUDIO_U8        0x0008  /**< Unsigned 8-bit samples */
-#define AUDIO_S8        0x8008  /**< Signed 8-bit samples */
-#define AUDIO_U16LSB    0x0010  /**< Unsigned 16-bit samples */
-#define AUDIO_S16LSB    0x8010  /**< Signed 16-bit samples */
-#define AUDIO_U16MSB    0x1010  /**< As above, but big-endian byte order */
-#define AUDIO_S16MSB    0x9010  /**< As above, but big-endian byte order */
-#define AUDIO_U16       AUDIO_U16LSB
-#define AUDIO_S16       AUDIO_S16LSB
-/* @} */
-```
-
-     FFmpeg中定义音频参数的相关数据结构为：  
-```c  
-// 这个结构是在ffplay.c中定义的：
-typedef struct AudioParams {
-    int freq;
-    int channels;
-    int64_t channel_layout;
-    enum AVSampleFormat fmt;
-    int frame_size;
-    int bytes_per_sec;
-} AudioParams;
-
-/**
- * Audio sample formats
- *
- * - The data described by the sample format is always in native-endian order.
- *   Sample values can be expressed by native C types, hence the lack of a signed
- *   24-bit sample format even though it is a common raw audio data format.
- *
- * - The floating-point formats are based on full volume being in the range
- *   [-1.0, 1.0]. Any values outside this range are beyond full volume level.
- *
- * - The data layout as used in av_samples_fill_arrays() and elsewhere in FFmpeg
- *   (such as AVFrame in libavcodec) is as follows:
- *
- * @par
- * For planar sample formats, each audio channel is in a separate data plane,
- * and linesize is the buffer size, in bytes, for a single plane. All data
- * planes must be the same size. For packed sample formats, only the first data
- * plane is used, and samples for each channel are interleaved. In this case,
- * linesize is the buffer size, in bytes, for the 1 plane.
- *
- */
-enum AVSampleFormat {
-    AV_SAMPLE_FMT_NONE = -1,
-    AV_SAMPLE_FMT_U8,          ///< unsigned 8 bits
-    AV_SAMPLE_FMT_S16,         ///< signed 16 bits
-    AV_SAMPLE_FMT_S32,         ///< signed 32 bits
-    AV_SAMPLE_FMT_FLT,         ///< float
-    AV_SAMPLE_FMT_DBL,         ///< double
-
-    AV_SAMPLE_FMT_U8P,         ///< unsigned 8 bits, planar
-    AV_SAMPLE_FMT_S16P,        ///< signed 16 bits, planar
-    AV_SAMPLE_FMT_S32P,        ///< signed 32 bits, planar
-    AV_SAMPLE_FMT_FLTP,        ///< float, planar
-    AV_SAMPLE_FMT_DBLP,        ///< double, planar
-    AV_SAMPLE_FMT_S64,         ///< signed 64 bits
-    AV_SAMPLE_FMT_S64P,        ///< signed 64 bits, planar
-
-    AV_SAMPLE_FMT_NB           ///< Number of sample formats. DO NOT USE if linking dynamically
-};
-```
-
-     **channel_layout**  
-     channel_layout是int64_t类型，表示音频声道布局，每bit代表一个特定的声道，参考channel_layout.h中的定义：
-```c  
-/**
- * @defgroup channel_masks Audio channel masks
- *
- * A channel layout is a 64-bits integer with a bit set for every channel.
- * The number of bits set must be equal to the number of channels.
- * The value 0 means that the channel layout is not known.
- * @note this data structure is not powerful enough to handle channels
- * combinations that have the same channel multiple times, such as
- * dual-mono.
- *
- * @{
- */
-#define AV_CH_FRONT_LEFT             0x00000001
-#define AV_CH_FRONT_RIGHT            0x00000002
-#define AV_CH_FRONT_CENTER           0x00000004
-#define AV_CH_LOW_FREQUENCY          0x00000008
-#define AV_CH_BACK_LEFT              0x00000010
-#define AV_CH_BACK_RIGHT             0x00000020
-#define AV_CH_FRONT_LEFT_OF_CENTER   0x00000040
-#define AV_CH_FRONT_RIGHT_OF_CENTER  0x00000080
-#define AV_CH_BACK_CENTER            0x00000100
-#define AV_CH_SIDE_LEFT              0x00000200
-#define AV_CH_SIDE_RIGHT             0x00000400
-#define AV_CH_TOP_CENTER             0x00000800
-#define AV_CH_TOP_FRONT_LEFT         0x00001000
-#define AV_CH_TOP_FRONT_CENTER       0x00002000
-#define AV_CH_TOP_FRONT_RIGHT        0x00004000
-#define AV_CH_TOP_BACK_LEFT          0x00008000
-#define AV_CH_TOP_BACK_CENTER        0x00010000
-#define AV_CH_TOP_BACK_RIGHT         0x00020000
-#define AV_CH_STEREO_LEFT            0x20000000  ///< Stereo downmix.
-#define AV_CH_STEREO_RIGHT           0x40000000  ///< See AV_CH_STEREO_LEFT.
-#define AV_CH_WIDE_LEFT              0x0000000080000000ULL
-#define AV_CH_WIDE_RIGHT             0x0000000100000000ULL
-#define AV_CH_SURROUND_DIRECT_LEFT   0x0000000200000000ULL
-#define AV_CH_SURROUND_DIRECT_RIGHT  0x0000000400000000ULL
-#define AV_CH_LOW_FREQUENCY_2        0x0000000800000000ULL
-
-/** Channel mask value used for AVCodecContext.request_channel_layout
-    to indicate that the user requests the channel order of the decoder output
-    to be the native codec channel order. */
-#define AV_CH_LAYOUT_NATIVE          0x8000000000000000ULL
-
-/**
- * @}
- * @defgroup channel_mask_c Audio channel layouts
- * @{
- * */
-#define AV_CH_LAYOUT_MONO              (AV_CH_FRONT_CENTER)
-#define AV_CH_LAYOUT_STEREO            (AV_CH_FRONT_LEFT|AV_CH_FRONT_RIGHT)
-#define AV_CH_LAYOUT_2POINT1           (AV_CH_LAYOUT_STEREO|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_2_1               (AV_CH_LAYOUT_STEREO|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_SURROUND          (AV_CH_LAYOUT_STEREO|AV_CH_FRONT_CENTER)
-#define AV_CH_LAYOUT_3POINT1           (AV_CH_LAYOUT_SURROUND|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_4POINT0           (AV_CH_LAYOUT_SURROUND|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_4POINT1           (AV_CH_LAYOUT_4POINT0|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_2_2               (AV_CH_LAYOUT_STEREO|AV_CH_SIDE_LEFT|AV_CH_SIDE_RIGHT)
-#define AV_CH_LAYOUT_QUAD              (AV_CH_LAYOUT_STEREO|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
-#define AV_CH_LAYOUT_5POINT0           (AV_CH_LAYOUT_SURROUND|AV_CH_SIDE_LEFT|AV_CH_SIDE_RIGHT)
-#define AV_CH_LAYOUT_5POINT1           (AV_CH_LAYOUT_5POINT0|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_5POINT0_BACK      (AV_CH_LAYOUT_SURROUND|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
-#define AV_CH_LAYOUT_5POINT1_BACK      (AV_CH_LAYOUT_5POINT0_BACK|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_6POINT0           (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_6POINT0_FRONT     (AV_CH_LAYOUT_2_2|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
-#define AV_CH_LAYOUT_HEXAGONAL         (AV_CH_LAYOUT_5POINT0_BACK|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_6POINT1           (AV_CH_LAYOUT_5POINT1|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_6POINT1_BACK      (AV_CH_LAYOUT_5POINT1_BACK|AV_CH_BACK_CENTER)
-#define AV_CH_LAYOUT_6POINT1_FRONT     (AV_CH_LAYOUT_6POINT0_FRONT|AV_CH_LOW_FREQUENCY)
-#define AV_CH_LAYOUT_7POINT0           (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
-#define AV_CH_LAYOUT_7POINT0_FRONT     (AV_CH_LAYOUT_5POINT0|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
-#define AV_CH_LAYOUT_7POINT1           (AV_CH_LAYOUT_5POINT1|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
-#define AV_CH_LAYOUT_7POINT1_WIDE      (AV_CH_LAYOUT_5POINT1|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
-#define AV_CH_LAYOUT_7POINT1_WIDE_BACK (AV_CH_LAYOUT_5POINT1_BACK|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
-#define AV_CH_LAYOUT_OCTAGONAL         (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_LEFT|AV_CH_BACK_CENTER|AV_CH_BACK_RIGHT)
-#define AV_CH_LAYOUT_HEXADECAGONAL     (AV_CH_LAYOUT_OCTAGONAL|AV_CH_WIDE_LEFT|AV_CH_WIDE_RIGHT|AV_CH_TOP_BACK_LEFT|AV_CH_TOP_BACK_RIGHT|AV_CH_TOP_BACK_CENTER|AV_CH_TOP_FRONT_CENTER|AV_CH_TOP_FRONT_LEFT|AV_CH_TOP_FRONT_RIGHT)
-#define AV_CH_LAYOUT_STEREO_DOWNMIX    (AV_CH_STEREO_LEFT|AV_CH_STEREO_RIGHT)
-```
-
-**[2]. 打开音频设备**  
-     打开音频设备并创建音频处理线程，通过调用SDL_OpenAudio()或SDL_OpenAudioDevice()实现。输入参数是预期的参数，输出参数是实际参数  
-     1) SDL提供两种使音频设备取得音频数据方法：  
-        a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据  
-        b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL  
-     2) 音频设备打开后播放静音，不启动回调，调用SDL_PauseAudio(0)后启动回调，开始正常播放音频  
-        SDL_OpenAudioDevice()第一个参数为NULL时，等价于SDL_OpenAudio()  
-
-#### 2.6.2 audio_thread()  
+#### 2.6.1 audio_thread()  
 从音频packet_queue中取数据，解码后放入音频frame_queue：  
 ```c
 // 音频解码线程：从音频packet_queue中取数据，解码后放入音频frame_queue
@@ -1274,148 +965,8 @@ static void sdl_audio_callback(void *opaque, Uint8 *stream, int len)
 ```
 
 #### 2.8.2 audio_decode_frame()  
-从音频frame队列中取出一个frame，此frame的格式是输入文件中的音频格式，音频设备不一定支持这些参数，所以要将frame转换为音频设备支持的格式。  
-```c  
-/**
- * Decode one audio frame and return its uncompressed size.
- *
- * The processed audio frame is decoded, converted if required, and
- * stored in is->audio_buf, with size in bytes given by the return
- * value.
- */
-static int audio_decode_frame(VideoState *is)
-{
-    int data_size, resampled_data_size;
-    int64_t dec_channel_layout;
-    av_unused double audio_clock0;
-    int wanted_nb_samples;
-    Frame *af;
-
-    if (is->paused)
-        return -1;
-
-    do {
-#if defined(_WIN32)
-        while (frame_queue_nb_remaining(&is->sampq) == 0) {
-            if ((av_gettime_relative() - audio_callback_time) > 1000000LL * is->audio_hw_buf_size / is->audio_tgt.bytes_per_sec / 2)
-                return -1;
-            av_usleep (1000);
-        }
-#endif
-        // 若队列头部可读，则由af指向可读帧
-        if (!(af = frame_queue_peek_readable(&is->sampq)))
-            return -1;
-        frame_queue_next(&is->sampq);
-    } while (af->serial != is->audioq.serial);
-
-    // 根据frame中指定的音频参数获取缓冲区的大小
-    data_size = av_samples_get_buffer_size(NULL, af->frame->channels,   // 本行两参数：linesize，声道数
-                                           af->frame->nb_samples,       // 本行一参数：本帧中包含的单个声道中的样本数
-                                           af->frame->format, 1);       // 本行两参数：采样格式，不对齐
-
-    // 获取声道布局
-    dec_channel_layout =
-        (af->frame->channel_layout && af->frame->channels == av_get_channel_layout_nb_channels(af->frame->channel_layout)) ?
-        af->frame->channel_layout : av_get_default_channel_layout(af->frame->channels);
-    // 获取样本数校正值：若同步时钟是音频，则不调整样本数；否则根据同步需要调整样本数
-    wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
-
-    // is->audio_tgt是SDL可接受的音频帧数，是audio_open()中取得的参数
-    // 在audio_open()函数中又有“is->audio_src = is->audio_tgt”
-    // 此处表示：如果frame中的音频参数 == is->audio_src == is->audio_tgt，那音频重采样的过程就免了(因此时is->swr_ctr是NULL)
-    // 　　　　　否则使用frame(源)和is->audio_tgt(目标)中的音频参数来设置is->swr_ctx，并使用frame中的音频参数来赋值is->audio_src
-    if (af->frame->format        != is->audio_src.fmt            ||
-        dec_channel_layout       != is->audio_src.channel_layout ||
-        af->frame->sample_rate   != is->audio_src.freq           ||
-        (wanted_nb_samples       != af->frame->nb_samples && !is->swr_ctx)) {
-        swr_free(&is->swr_ctx);
-        // 使用frame(源)和is->audio_tgt(目标)中的音频参数来设置is->swr_ctx
-        is->swr_ctx = swr_alloc_set_opts(NULL,
-                                         is->audio_tgt.channel_layout, is->audio_tgt.fmt, is->audio_tgt.freq,
-                                         dec_channel_layout,           af->frame->format, af->frame->sample_rate,
-                                         0, NULL);
-        if (!is->swr_ctx || swr_init(is->swr_ctx) < 0) {
-            av_log(NULL, AV_LOG_ERROR,
-                   "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
-                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->channels,
-                    is->audio_tgt.freq, av_get_sample_fmt_name(is->audio_tgt.fmt), is->audio_tgt.channels);
-            swr_free(&is->swr_ctx);
-            return -1;
-        }
-        // 使用frame中的参数更新is->audio_src，第一次更新后后面基本不用执行此if分支了，因为一个音频流中各frame通用参数一样
-        is->audio_src.channel_layout = dec_channel_layout;
-        is->audio_src.channels       = af->frame->channels;
-        is->audio_src.freq = af->frame->sample_rate;
-        is->audio_src.fmt = af->frame->format;
-    }
-
-    if (is->swr_ctx) {
-        // 重采样输入参数1：输入音频样本数是af->frame->nb_samples
-        // 重采样输入参数2：输入音频缓冲区
-        const uint8_t **in = (const uint8_t **)af->frame->extended_data;
-        // 重采样输出参数1：输出音频缓冲区尺寸
-        // 重采样输出参数2：输出音频缓冲区
-        uint8_t **out = &is->audio_buf1;
-        // 重采样输出参数：输出音频样本数(多加了256个样本)
-        int out_count = (int64_t)wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate + 256;
-        // 重采样输出参数：输出音频缓冲区尺寸(以字节为单位)
-        int out_size  = av_samples_get_buffer_size(NULL, is->audio_tgt.channels, out_count, is->audio_tgt.fmt, 0);
-        int len2;
-        if (out_size < 0) {
-            av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size() failed\n");
-            return -1;
-        }
-        // 如果frame中的样本数经过校正，则条件成立
-        if (wanted_nb_samples != af->frame->nb_samples) {
-            // 重采样补偿：不清楚参数怎么算的
-            if (swr_set_compensation(is->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * is->audio_tgt.freq / af->frame->sample_rate, 
-                                     wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate) < 0) {
-                av_log(NULL, AV_LOG_ERROR, "swr_set_compensation() failed\n");
-                return -1;
-            }
-        }
-        av_fast_malloc(&is->audio_buf1, &is->audio_buf1_size, out_size);
-        if (!is->audio_buf1)
-            return AVERROR(ENOMEM);
-        // 音频重采样：返回值是重采样后得到的音频数据中单个声道的样本数
-        len2 = swr_convert(is->swr_ctx, out, out_count, in, af->frame->nb_samples);
-        if (len2 < 0) {
-            av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
-            return -1;
-        }
-        if (len2 == out_count) {
-            av_log(NULL, AV_LOG_WARNING, "audio buffer is probably too small\n");
-            if (swr_init(is->swr_ctx) < 0)
-                swr_free(&is->swr_ctx);
-        }
-        is->audio_buf = is->audio_buf1;
-        // 重采样返回的一帧音频数据大小(以字节为单位)
-        resampled_data_size = len2 * is->audio_tgt.channels * av_get_bytes_per_sample(is->audio_tgt.fmt);
-    } else {
-        // 未经重采样，则将指针指向frame中的音频数据
-        is->audio_buf = af->frame->data[0];
-        resampled_data_size = data_size;
-    }
-
-    audio_clock0 = is->audio_clock;
-    /* update the audio clock with the pts */
-    if (!isnan(af->pts))
-        is->audio_clock = af->pts + (double) af->frame->nb_samples / af->frame->sample_rate;
-    else
-        is->audio_clock = NAN;
-    is->audio_clock_serial = af->serial;
-#ifdef DEBUG
-    {
-        static double last_clock;
-        printf("audio: delay=%0.3f clock=%0.3f clock0=%0.3f\n",
-               is->audio_clock - last_clock,
-               is->audio_clock, audio_clock0);
-        last_clock = is->audio_clock;
-    }
-#endif
-    return resampled_data_size;
-}
-```
+`audio_decode_frame()`主要是进行音频重采样，从音频frame队列中取出一个frame，此frame的格式是输入文件中的音频格式，音频设备不一定支持这些参数，所以要将frame转换为音频设备支持的格式。  
+`audio_decode_frame()`的实现在后面第5节讲述。  
 
 ## 3. 音视频同步  
 音视频同步的目的是为了使播放的声音和显示的画面保持一致。视频按帧播放，图像显示设备每次显示一帧画面，视频播放速度由帧率确定，帧率指示每秒显示多少帧；音频按采样点播放，声音播放设备每次播放一个采样点，声音播放速度由采样率确定，采样率指示每秒播放多少个采样点。如果仅仅是视频按帧率播放，音频按采样率播放，二者没有同步机制，即使最初音视频是基本同步的，随着时间的流逝，音视频会逐渐失去同步，并且不同步的现象会越来越严重。这是因为：一、播放时间难以精确控制，二、异常及误差会随时间累积。所以，必须要采用一定的同步策略，不断对音视频的时间差作校正，使图像显示与声音播放总体保持一致。  
@@ -1864,10 +1415,663 @@ synchronize_audio()
 ### 3.5 音视频同步到外部时钟  
 略
 
-## 4. 图像格式转换与显示  
+## 4. 图像格式转换与图像显示  
+FFmpeg解码得到的视频帧的格式未必能被SDL支持，在这种情况下，需要进行图像格式转换，即将视频帧图像格式转换为SDL支持的图像格式，否则是无法正常显示的。  
+图像格式转换是在视频播放线程(主线程中)中的`upload_texture()`函数中实现的。调用链如下：  
+```c  
+main() -- >
+event_loop -->
+refresh_loop_wait_event() -->
+video_refresh() -->
+video_display() -->
+video_image_display() -->
+upload_texture()
+```
 
-## 5. 音频重采样与播放  
+**upload_texture()**  
+upload_texture()源码如下：  
+```c  
+static int upload_texture(SDL_Texture **tex, AVFrame *frame, struct SwsContext **img_convert_ctx) {
+    int ret = 0;
+    Uint32 sdl_pix_fmt;
+    SDL_BlendMode sdl_blendmode;
+    // 根据frame中的图像格式(FFmpeg像素格式)，获取对应的SDL像素格式
+    get_sdl_pix_fmt_and_blendmode(frame->format, &sdl_pix_fmt, &sdl_blendmode);
+    // 参数tex实际是&is->vid_texture，此处根据得到的SDL像素格式，为&is->vid_texture
+    if (realloc_texture(tex, sdl_pix_fmt == SDL_PIXELFORMAT_UNKNOWN ? SDL_PIXELFORMAT_ARGB8888 : sdl_pix_fmt, frame->width, frame->height, sdl_blendmode, 0) < 0)
+        return -1;
+    switch (sdl_pix_fmt) {
+        // frame格式是SDL不支持的格式，则需要进行图像格式转换，转换为目标格式AV_PIX_FMT_BGRA，对应SDL_PIXELFORMAT_BGRA32
+        case SDL_PIXELFORMAT_UNKNOWN:
+            /* This should only happen if we are not using avfilter... */
+            *img_convert_ctx = sws_getCachedContext(*img_convert_ctx,
+                frame->width, frame->height, frame->format, frame->width, frame->height,
+                AV_PIX_FMT_BGRA, sws_flags, NULL, NULL, NULL);
+            if (*img_convert_ctx != NULL) {
+                uint8_t *pixels[4];
+                int pitch[4];
+                if (!SDL_LockTexture(*tex, NULL, (void **)pixels, pitch)) {
+                    sws_scale(*img_convert_ctx, (const uint8_t * const *)frame->data, frame->linesize,
+                              0, frame->height, pixels, pitch);
+                    SDL_UnlockTexture(*tex);
+                }
+            } else {
+                av_log(NULL, AV_LOG_FATAL, "Cannot initialize the conversion context\n");
+                ret = -1;
+            }
+            break;
+        // frame格式对应SDL_PIXELFORMAT_IYUV，不用进行图像格式转换，调用SDL_UpdateYUVTexture()更新SDL texture
+        case SDL_PIXELFORMAT_IYUV:
+            if (frame->linesize[0] > 0 && frame->linesize[1] > 0 && frame->linesize[2] > 0) {
+                ret = SDL_UpdateYUVTexture(*tex, NULL, frame->data[0], frame->linesize[0],
+                                                       frame->data[1], frame->linesize[1],
+                                                       frame->data[2], frame->linesize[2]);
+            } else if (frame->linesize[0] < 0 && frame->linesize[1] < 0 && frame->linesize[2] < 0) {
+                ret = SDL_UpdateYUVTexture(*tex, NULL, frame->data[0] + frame->linesize[0] * (frame->height                    - 1), -frame->linesize[0],
+                                                       frame->data[1] + frame->linesize[1] * (AV_CEIL_RSHIFT(frame->height, 1) - 1), -frame->linesize[1],
+                                                       frame->data[2] + frame->linesize[2] * (AV_CEIL_RSHIFT(frame->height, 1) - 1), -frame->linesize[2]);
+            } else {
+                av_log(NULL, AV_LOG_ERROR, "Mixed negative and positive linesizes are not supported.\n");
+                return -1;
+            }
+            break;
+        // frame格式对应其他SDL像素格式，不用进行图像格式转换，调用SDL_UpdateTexture()更新SDL texture
+        default:
+            if (frame->linesize[0] < 0) {
+                ret = SDL_UpdateTexture(*tex, NULL, frame->data[0] + frame->linesize[0] * (frame->height - 1), -frame->linesize[0]);
+            } else {
+                ret = SDL_UpdateTexture(*tex, NULL, frame->data[0], frame->linesize[0]);
+            }
+            break;
+    }
+    return ret;
+}
+```
+frame中的像素格式是FFmpeg中定义的像素格式，FFmpeg中定义的很多像素格式和SDL中定义的很多像素格式其实是同一种格式，只名称不同而已。  
+根据frame中的像素格式与SDL支持的像素格式的匹配情况，upload_texture()处理三种类型，对应switch语句的三个分支：  
+1) 如果frame图像格式对应SDL_PIXELFORMAT_IYUV格式，不进行图像格式转换，使用`SDL_UpdateYUVTexture()`将图像数据更新到`&is->vid_texture`  
+2) 如果frame图像格式对应其他被SDL支持的格式(诸如AV_PIX_FMT_RGB32)，也不进行图像格式转换，使用`SDL_UpdateTexture()`将图像数据更新到`&is->vid_texture`  
+3) 如果frame图像格式不被SDL支持(即对应SDL_PIXELFORMAT_UNKNOWN)，则需要进行图像格式转换  
+1) 2)两种类型不进行图像格式转换。我们考虑第3)种情况。  
 
+## 4.1 根据映射表获取frame对应SDL中的像素格式  
+**get_sdl_pix_fmt_and_blendmode()**  
+这个函数的作用，获取输入参数`format`(FFmpeg像素格式)在SDL中的像素格式，取到的SDL像素格式存在输出参数`sdl_pix_fmt`中  
+```c  
+static void get_sdl_pix_fmt_and_blendmode(int format, Uint32 *sdl_pix_fmt, SDL_BlendMode *sdl_blendmode)
+{
+    int i;
+    *sdl_blendmode = SDL_BLENDMODE_NONE;
+    *sdl_pix_fmt = SDL_PIXELFORMAT_UNKNOWN;
+    if (format == AV_PIX_FMT_RGB32   ||
+        format == AV_PIX_FMT_RGB32_1 ||
+        format == AV_PIX_FMT_BGR32   ||
+        format == AV_PIX_FMT_BGR32_1)
+        *sdl_blendmode = SDL_BLENDMODE_BLEND;
+    for (i = 0; i < FF_ARRAY_ELEMS(sdl_texture_format_map) - 1; i++) {
+        if (format == sdl_texture_format_map[i].format) {
+            *sdl_pix_fmt = sdl_texture_format_map[i].texture_fmt;
+            return;
+        }
+    }
+}
+```
+在ffplay.c中定义了一个表`sdl_texture_format_map[]`，其中定义了FFmpeg中一些像素格式与SDL像素格式的映射关系，如下：  
+```c  
+static const struct TextureFormatEntry {
+    enum AVPixelFormat format;
+    int texture_fmt;
+} sdl_texture_format_map[] = {
+    { AV_PIX_FMT_RGB8,           SDL_PIXELFORMAT_RGB332 },
+    { AV_PIX_FMT_RGB444,         SDL_PIXELFORMAT_RGB444 },
+    { AV_PIX_FMT_RGB555,         SDL_PIXELFORMAT_RGB555 },
+    { AV_PIX_FMT_BGR555,         SDL_PIXELFORMAT_BGR555 },
+    { AV_PIX_FMT_RGB565,         SDL_PIXELFORMAT_RGB565 },
+    { AV_PIX_FMT_BGR565,         SDL_PIXELFORMAT_BGR565 },
+    { AV_PIX_FMT_RGB24,          SDL_PIXELFORMAT_RGB24 },
+    { AV_PIX_FMT_BGR24,          SDL_PIXELFORMAT_BGR24 },
+    { AV_PIX_FMT_0RGB32,         SDL_PIXELFORMAT_RGB888 },
+    { AV_PIX_FMT_0BGR32,         SDL_PIXELFORMAT_BGR888 },
+    { AV_PIX_FMT_NE(RGB0, 0BGR), SDL_PIXELFORMAT_RGBX8888 },
+    { AV_PIX_FMT_NE(BGR0, 0RGB), SDL_PIXELFORMAT_BGRX8888 },
+    { AV_PIX_FMT_RGB32,          SDL_PIXELFORMAT_ARGB8888 },
+    { AV_PIX_FMT_RGB32_1,        SDL_PIXELFORMAT_RGBA8888 },
+    { AV_PIX_FMT_BGR32,          SDL_PIXELFORMAT_ABGR8888 },
+    { AV_PIX_FMT_BGR32_1,        SDL_PIXELFORMAT_BGRA8888 },
+    { AV_PIX_FMT_YUV420P,        SDL_PIXELFORMAT_IYUV },
+    { AV_PIX_FMT_YUYV422,        SDL_PIXELFORMAT_YUY2 },
+    { AV_PIX_FMT_UYVY422,        SDL_PIXELFORMAT_UYVY },
+    { AV_PIX_FMT_NONE,           SDL_PIXELFORMAT_UNKNOWN },
+};
+```
+可以看到，除了最后一项，其他格式的图像送给SDL是可以直接显示的，不必进行图像转换。  
+关于这些像素格式的含义，可参考“[色彩空间与像素格式]()”  
+
+### 4.2 重新分配vid_texture  
+**realloc_texture()**  
+根据新得到的SDL像素格式，为`&is->vid_texture`重新分配空间，如下所示，先`SDL_DestroyTexture()`销毁，再`SDL_CreateTexture()`创建  
+```c  
+static int realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_width, int new_height, SDL_BlendMode blendmode, int init_texture)
+{
+    Uint32 format;
+    int access, w, h;
+    if (!*texture || SDL_QueryTexture(*texture, &format, &access, &w, &h) < 0 || new_width != w || new_height != h || new_format != format) {
+        void *pixels;
+        int pitch;
+        if (*texture)
+            SDL_DestroyTexture(*texture);
+        if (!(*texture = SDL_CreateTexture(renderer, new_format, SDL_TEXTUREACCESS_STREAMING, new_width, new_height)))
+            return -1;
+        if (SDL_SetTextureBlendMode(*texture, blendmode) < 0)
+            return -1;
+        if (init_texture) {
+            if (SDL_LockTexture(*texture, NULL, &pixels, &pitch) < 0)
+                return -1;
+            memset(pixels, 0, pitch * new_height);
+            SDL_UnlockTexture(*texture);
+        }
+        av_log(NULL, AV_LOG_VERBOSE, "Created %dx%d texture with %s.\n", new_width, new_height, SDL_GetPixelFormatName(new_format));
+    }
+    return 0;
+}
+```
+
+### 4.3 复用或新分配一个SwsContext  
+**sws_getCachedContext()**  
+```c  
+*img_convert_ctx = sws_getCachedContext(*img_convert_ctx,
+    frame->width, frame->height, frame->format, frame->width, frame->height,
+    AV_PIX_FMT_BGRA, sws_flags, NULL, NULL, NULL);
+```
+
+### 4.4 图像格式转换  
+```c  
+if (*img_convert_ctx != NULL) {
+    uint8_t *pixels[4];
+    int pitch[4];
+    if (!SDL_LockTexture(*tex, NULL, (void **)pixels, pitch)) {
+        sws_scale(*img_convert_ctx, (const uint8_t * const *)frame->data, frame->linesize,
+                  0, frame->height, pixels, pitch);
+        SDL_UnlockTexture(*tex);
+    }
+}
+```
+
+## 5. 音频重采样与音频播放  
+FFmpeg解码得到的音频帧的格式未必能被SDL支持，在这种情况下，需要进行音频重采样，即将音频帧格式转换为SDL支持的音频格式，否则是无法正常播放的。  
+音频重采样涉及两个步骤：  
+1)  打开音频设备时进行的准备工作：确定SDL支持的音频格式，作为后期音频重采样的目标格式  
+2)  音频播放线程中，取出音频帧后，若有需要(音频帧格式与SDL支持音频格式不匹配)则进行重采样，否则直接输出  
+
+### 5.1 打开音频设备  
+音频设备的打开实际是在解复用线程中实现的。解复用线程中先打开音频设备(设定音频回调函数供SDL音频播放线程回调)，然后再创建音频解码线程。调用链如下：  
+```c
+main() -->
+stream_open() -->
+read_thread() -->
+stream_component_open() -->
+    audio_open(is, channel_layout, nb_channels, sample_rate, &is->audio_tgt);
+    decoder_start(&is->auddec, audio_thread, is);
+```
+audio_open()函数填入期望的音频参数，打开音频设备后，将实际的音频参数存入输出参数is->audio_tgt中，后面音频播放线程用会用到此参数，使用此参数将原始音频数据重采样，转换为音频设备支持的格式。  
+```c
+static int audio_open(void *opaque, int64_t wanted_channel_layout, int wanted_nb_channels, int wanted_sample_rate, struct AudioParams *audio_hw_params)
+{
+    SDL_AudioSpec wanted_spec, spec;
+    const char *env;
+    static const int next_nb_channels[] = {0, 0, 1, 6, 2, 6, 4, 6};
+    static const int next_sample_rates[] = {0, 44100, 48000, 96000, 192000};
+    int next_sample_rate_idx = FF_ARRAY_ELEMS(next_sample_rates) - 1;
+
+    env = SDL_getenv("SDL_AUDIO_CHANNELS");
+    if (env) {  // 若环境变量有设置，优先从环境变量取得声道数和声道布局
+        wanted_nb_channels = atoi(env);
+        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
+    }
+    if (!wanted_channel_layout || wanted_nb_channels != av_get_channel_layout_nb_channels(wanted_channel_layout)) {
+        wanted_channel_layout = av_get_default_channel_layout(wanted_nb_channels);
+        wanted_channel_layout &= ~AV_CH_LAYOUT_STEREO_DOWNMIX;
+    }
+    // 根据channel_layout获取nb_channels，当传入参数wanted_nb_channels不匹配时，此处会作修正
+    wanted_nb_channels = av_get_channel_layout_nb_channels(wanted_channel_layout);
+    wanted_spec.channels = wanted_nb_channels;  // 声道数
+    wanted_spec.freq = wanted_sample_rate;      // 采样率
+    if (wanted_spec.freq <= 0 || wanted_spec.channels <= 0) {
+        av_log(NULL, AV_LOG_ERROR, "Invalid sample rate or channel count!\n");
+        return -1;
+    }
+    while (next_sample_rate_idx && next_sample_rates[next_sample_rate_idx] >= wanted_spec.freq)
+        next_sample_rate_idx--;     // 从采样率数组中找到第一个不大于传入参数wanted_sample_rate的值
+    // 音频采样格式有两大类型：planar和packed，假设一个双声道音频文件，一个左声道采样点记作L，一个右声道采样点记作R，则：
+    // planar存储格式：(plane1)LLLLLLLL...LLLL (plane2)RRRRRRRR...RRRR
+    // packed存储格式：(plane1)LRLRLRLR...........................LRLR
+    // 在这两种采样类型下，又细分多种采样格式，如AV_SAMPLE_FMT_S16、AV_SAMPLE_FMT_S16P等，注意SDL2.0目前不支持planar格式
+    // channel_layout是int64_t类型，表示音频声道布局，每bit代表一个特定的声道，参考channel_layout.h中的定义，一目了然
+    // 数据量(bits/秒) = 采样率(Hz) * 采样深度(bit) * 声道数
+    wanted_spec.format = AUDIO_S16SYS;          // 采样格式：S表带符号，16是采样深度(位深)，SYS表采用系统字节序，这个宏在SDL中定义
+    wanted_spec.silence = 0;                    // 静音值
+    wanted_spec.samples = FFMAX(SDL_AUDIO_MIN_BUFFER_SIZE, 2 << av_log2(wanted_spec.freq / SDL_AUDIO_MAX_CALLBACKS_PER_SEC));   // SDL声音缓冲区尺寸，单位是单声道采样点尺寸x声道数
+    wanted_spec.callback = sdl_audio_callback;  // 回调函数，若为NULL，则应使用SDL_QueueAudio()机制
+    wanted_spec.userdata = opaque;              // 提供给回调函数的参数
+    // 打开音频设备并创建音频处理线程。期望的参数是wanted_spec，实际得到的硬件参数是spec
+    // 1) SDL提供两种使音频设备取得音频数据方法：
+    //    a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据
+    //    b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL
+    // 2) 音频设备打开后播放静音，不启动回调，调用SDL_PauseAudio(0)后启动回调，开始正常播放音频
+    // SDL_OpenAudioDevice()第一个参数为NULL时，等价于SDL_OpenAudio()
+    while (!(audio_dev = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_CHANNELS_CHANGE))) {
+        av_log(NULL, AV_LOG_WARNING, "SDL_OpenAudio (%d channels, %d Hz): %s\n",
+               wanted_spec.channels, wanted_spec.freq, SDL_GetError());
+        // 如果打开音频设备失败，则尝试用不同的声道数或采样率再试打开音频设备，这里有些奇怪，暂不深究
+        wanted_spec.channels = next_nb_channels[FFMIN(7, wanted_spec.channels)];
+        if (!wanted_spec.channels) {
+            wanted_spec.freq = next_sample_rates[next_sample_rate_idx--];
+            wanted_spec.channels = wanted_nb_channels;
+            if (!wanted_spec.freq) {
+                av_log(NULL, AV_LOG_ERROR,
+                       "No more combinations to try, audio open failed\n");
+                return -1;
+            }
+        }
+        wanted_channel_layout = av_get_default_channel_layout(wanted_spec.channels);
+    }
+    // 检查打开音频设备的实际参数：采样格式
+    if (spec.format != AUDIO_S16SYS) {
+        av_log(NULL, AV_LOG_ERROR,
+               "SDL advised audio format %d is not supported!\n", spec.format);
+        return -1;
+    }
+    // 检查打开音频设备的实际参数：声道数
+    if (spec.channels != wanted_spec.channels) {
+        wanted_channel_layout = av_get_default_channel_layout(spec.channels);
+        if (!wanted_channel_layout) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "SDL advised channel count %d is not supported!\n", spec.channels);
+            return -1;
+        }
+    }
+
+    // wanted_spec是期望的参数，spec是实际的参数，wanted_spec和spec都是SDL中的结构。
+    // 此处audio_hw_params是FFmpeg中的参数，输出参数供上级函数使用
+    audio_hw_params->fmt = AV_SAMPLE_FMT_S16;
+    audio_hw_params->freq = spec.freq;
+    audio_hw_params->channel_layout = wanted_channel_layout;
+    audio_hw_params->channels =  spec.channels;
+    audio_hw_params->frame_size = av_samples_get_buffer_size(NULL, audio_hw_params->channels, 1, audio_hw_params->fmt, 1);
+    audio_hw_params->bytes_per_sec = av_samples_get_buffer_size(NULL, audio_hw_params->channels, audio_hw_params->freq, audio_hw_params->fmt, 1);
+    if (audio_hw_params->bytes_per_sec <= 0 || audio_hw_params->frame_size <= 0) {
+        av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size failed\n");
+        return -1;
+    }
+    return spec.size;
+}
+```
+打开音频设备，涉及到FFmpeg中音频存储的基础概念，为稍显清晰，将相关注释摘抄如下：  
+**[1]. 音频格式相关**  
+     **planar&packed**  
+     音频采样格式有两大类型：planar和packed，假设一个双声道音频文件，一个左声道采样点记作L，一个右声道采样点记作R，则：  
+     planar存储格式：(plane1)LLLLLLLL...LLLL (plane2)RRRRRRRR...RRRR  
+     packed存储格式：(plane1)LRLRLRLR...........................LRLR  
+     在这两种采样类型下，又细分多种采样格式，如AV_SAMPLE_FMT_S16、AV_SAMPLE_FMT_S16P等，注意SDL2.0目前不支持planar格式  
+
+     SDL中定义音频参数数据结构定义如下：  
+```c  
+/**
+ *  The calculated values in this structure are calculated by SDL_OpenAudio().
+ *
+ *  For multi-channel audio, the default SDL channel mapping is:
+ *  2:  FL FR                       (stereo)
+ *  3:  FL FR LFE                   (2.1 surround)
+ *  4:  FL FR BL BR                 (quad)
+ *  5:  FL FR FC BL BR              (quad + center)
+ *  6:  FL FR FC LFE SL SR          (5.1 surround - last two can also be BL BR)
+ *  7:  FL FR FC LFE BC SL SR       (6.1 surround)
+ *  8:  FL FR FC LFE BL BR SL SR    (7.1 surround)
+ */
+typedef struct SDL_AudioSpec
+{
+    int freq;                   /**< DSP frequency -- samples per second */
+    SDL_AudioFormat format;     /**< Audio data format */
+    Uint8 channels;             /**< Number of channels: 1 mono, 2 stereo */
+    Uint8 silence;              /**< Audio buffer silence value (calculated) */
+    Uint16 samples;             /**< Audio buffer size in sample FRAMES (total samples divided by channel count) */
+    Uint16 padding;             /**< Necessary for some compile environments */
+    Uint32 size;                /**< Audio buffer size in bytes (calculated) */
+    SDL_AudioCallback callback; /**< Callback that feeds the audio device (NULL to use SDL_QueueAudio()). */
+    void *userdata;             /**< Userdata passed to callback (ignored for NULL callbacks). */
+} SDL_AudioSpec;
+```
+
+    SDL音频格式定义如下：  
+```c  
+/**
+ *  \brief Audio format flags.
+ *
+ *  These are what the 16 bits in SDL_AudioFormat currently mean...
+ *  (Unspecified bits are always zero).
+ *
+ *  \verbatim
+    ++-----------------------sample is signed if set
+    ||
+    ||       ++-----------sample is bigendian if set
+    ||       ||
+    ||       ||          ++---sample is float if set
+    ||       ||          ||
+    ||       ||          || +---sample bit size---+
+    ||       ||          || |                     |
+    15 14 13 12 11 10 09 08 07 06 05 04 03 02 01 00
+    \endverbatim
+ *
+ *  There are macros in SDL 2.0 and later to query these bits.
+ */
+typedef Uint16 SDL_AudioFormat;
+
+/**
+ *  \name Audio format flags
+ *
+ *  Defaults to LSB byte order.
+ */
+/* @{ */
+#define AUDIO_U8        0x0008  /**< Unsigned 8-bit samples */
+#define AUDIO_S8        0x8008  /**< Signed 8-bit samples */
+#define AUDIO_U16LSB    0x0010  /**< Unsigned 16-bit samples */
+#define AUDIO_S16LSB    0x8010  /**< Signed 16-bit samples */
+#define AUDIO_U16MSB    0x1010  /**< As above, but big-endian byte order */
+#define AUDIO_S16MSB    0x9010  /**< As above, but big-endian byte order */
+#define AUDIO_U16       AUDIO_U16LSB
+#define AUDIO_S16       AUDIO_S16LSB
+/* @} */
+```
+
+    FFmpeg中定义音频参数的相关数据结构为：  
+```c  
+// 这个结构是在ffplay.c中定义的：
+typedef struct AudioParams {
+    int freq;
+    int channels;
+    int64_t channel_layout;
+    enum AVSampleFormat fmt;
+    int frame_size;
+    int bytes_per_sec;
+} AudioParams;
+
+/**
+ * Audio sample formats
+ *
+ * - The data described by the sample format is always in native-endian order.
+ *   Sample values can be expressed by native C types, hence the lack of a signed
+ *   24-bit sample format even though it is a common raw audio data format.
+ *
+ * - The floating-point formats are based on full volume being in the range
+ *   [-1.0, 1.0]. Any values outside this range are beyond full volume level.
+ *
+ * - The data layout as used in av_samples_fill_arrays() and elsewhere in FFmpeg
+ *   (such as AVFrame in libavcodec) is as follows:
+ *
+ * @par
+ * For planar sample formats, each audio channel is in a separate data plane,
+ * and linesize is the buffer size, in bytes, for a single plane. All data
+ * planes must be the same size. For packed sample formats, only the first data
+ * plane is used, and samples for each channel are interleaved. In this case,
+ * linesize is the buffer size, in bytes, for the 1 plane.
+ *
+ */
+enum AVSampleFormat {
+    AV_SAMPLE_FMT_NONE = -1,
+    AV_SAMPLE_FMT_U8,          ///< unsigned 8 bits
+    AV_SAMPLE_FMT_S16,         ///< signed 16 bits
+    AV_SAMPLE_FMT_S32,         ///< signed 32 bits
+    AV_SAMPLE_FMT_FLT,         ///< float
+    AV_SAMPLE_FMT_DBL,         ///< double
+
+    AV_SAMPLE_FMT_U8P,         ///< unsigned 8 bits, planar
+    AV_SAMPLE_FMT_S16P,        ///< signed 16 bits, planar
+    AV_SAMPLE_FMT_S32P,        ///< signed 32 bits, planar
+    AV_SAMPLE_FMT_FLTP,        ///< float, planar
+    AV_SAMPLE_FMT_DBLP,        ///< double, planar
+    AV_SAMPLE_FMT_S64,         ///< signed 64 bits
+    AV_SAMPLE_FMT_S64P,        ///< signed 64 bits, planar
+
+    AV_SAMPLE_FMT_NB           ///< Number of sample formats. DO NOT USE if linking dynamically
+};
+```
+
+     **channel_layout**  
+     channel_layout是int64_t类型，表示音频声道布局，每bit代表一个特定的声道，参考channel_layout.h中的定义：
+```c  
+/**
+ * @defgroup channel_masks Audio channel masks
+ *
+ * A channel layout is a 64-bits integer with a bit set for every channel.
+ * The number of bits set must be equal to the number of channels.
+ * The value 0 means that the channel layout is not known.
+ * @note this data structure is not powerful enough to handle channels
+ * combinations that have the same channel multiple times, such as
+ * dual-mono.
+ *
+ * @{
+ */
+#define AV_CH_FRONT_LEFT             0x00000001
+#define AV_CH_FRONT_RIGHT            0x00000002
+#define AV_CH_FRONT_CENTER           0x00000004
+#define AV_CH_LOW_FREQUENCY          0x00000008
+#define AV_CH_BACK_LEFT              0x00000010
+#define AV_CH_BACK_RIGHT             0x00000020
+#define AV_CH_FRONT_LEFT_OF_CENTER   0x00000040
+#define AV_CH_FRONT_RIGHT_OF_CENTER  0x00000080
+#define AV_CH_BACK_CENTER            0x00000100
+#define AV_CH_SIDE_LEFT              0x00000200
+#define AV_CH_SIDE_RIGHT             0x00000400
+#define AV_CH_TOP_CENTER             0x00000800
+#define AV_CH_TOP_FRONT_LEFT         0x00001000
+#define AV_CH_TOP_FRONT_CENTER       0x00002000
+#define AV_CH_TOP_FRONT_RIGHT        0x00004000
+#define AV_CH_TOP_BACK_LEFT          0x00008000
+#define AV_CH_TOP_BACK_CENTER        0x00010000
+#define AV_CH_TOP_BACK_RIGHT         0x00020000
+#define AV_CH_STEREO_LEFT            0x20000000  ///< Stereo downmix.
+#define AV_CH_STEREO_RIGHT           0x40000000  ///< See AV_CH_STEREO_LEFT.
+#define AV_CH_WIDE_LEFT              0x0000000080000000ULL
+#define AV_CH_WIDE_RIGHT             0x0000000100000000ULL
+#define AV_CH_SURROUND_DIRECT_LEFT   0x0000000200000000ULL
+#define AV_CH_SURROUND_DIRECT_RIGHT  0x0000000400000000ULL
+#define AV_CH_LOW_FREQUENCY_2        0x0000000800000000ULL
+
+/** Channel mask value used for AVCodecContext.request_channel_layout
+    to indicate that the user requests the channel order of the decoder output
+    to be the native codec channel order. */
+#define AV_CH_LAYOUT_NATIVE          0x8000000000000000ULL
+
+/**
+ * @}
+ * @defgroup channel_mask_c Audio channel layouts
+ * @{
+ * */
+#define AV_CH_LAYOUT_MONO              (AV_CH_FRONT_CENTER)
+#define AV_CH_LAYOUT_STEREO            (AV_CH_FRONT_LEFT|AV_CH_FRONT_RIGHT)
+#define AV_CH_LAYOUT_2POINT1           (AV_CH_LAYOUT_STEREO|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_2_1               (AV_CH_LAYOUT_STEREO|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_SURROUND          (AV_CH_LAYOUT_STEREO|AV_CH_FRONT_CENTER)
+#define AV_CH_LAYOUT_3POINT1           (AV_CH_LAYOUT_SURROUND|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_4POINT0           (AV_CH_LAYOUT_SURROUND|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_4POINT1           (AV_CH_LAYOUT_4POINT0|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_2_2               (AV_CH_LAYOUT_STEREO|AV_CH_SIDE_LEFT|AV_CH_SIDE_RIGHT)
+#define AV_CH_LAYOUT_QUAD              (AV_CH_LAYOUT_STEREO|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
+#define AV_CH_LAYOUT_5POINT0           (AV_CH_LAYOUT_SURROUND|AV_CH_SIDE_LEFT|AV_CH_SIDE_RIGHT)
+#define AV_CH_LAYOUT_5POINT1           (AV_CH_LAYOUT_5POINT0|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_5POINT0_BACK      (AV_CH_LAYOUT_SURROUND|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
+#define AV_CH_LAYOUT_5POINT1_BACK      (AV_CH_LAYOUT_5POINT0_BACK|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_6POINT0           (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_6POINT0_FRONT     (AV_CH_LAYOUT_2_2|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
+#define AV_CH_LAYOUT_HEXAGONAL         (AV_CH_LAYOUT_5POINT0_BACK|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_6POINT1           (AV_CH_LAYOUT_5POINT1|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_6POINT1_BACK      (AV_CH_LAYOUT_5POINT1_BACK|AV_CH_BACK_CENTER)
+#define AV_CH_LAYOUT_6POINT1_FRONT     (AV_CH_LAYOUT_6POINT0_FRONT|AV_CH_LOW_FREQUENCY)
+#define AV_CH_LAYOUT_7POINT0           (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
+#define AV_CH_LAYOUT_7POINT0_FRONT     (AV_CH_LAYOUT_5POINT0|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
+#define AV_CH_LAYOUT_7POINT1           (AV_CH_LAYOUT_5POINT1|AV_CH_BACK_LEFT|AV_CH_BACK_RIGHT)
+#define AV_CH_LAYOUT_7POINT1_WIDE      (AV_CH_LAYOUT_5POINT1|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
+#define AV_CH_LAYOUT_7POINT1_WIDE_BACK (AV_CH_LAYOUT_5POINT1_BACK|AV_CH_FRONT_LEFT_OF_CENTER|AV_CH_FRONT_RIGHT_OF_CENTER)
+#define AV_CH_LAYOUT_OCTAGONAL         (AV_CH_LAYOUT_5POINT0|AV_CH_BACK_LEFT|AV_CH_BACK_CENTER|AV_CH_BACK_RIGHT)
+#define AV_CH_LAYOUT_HEXADECAGONAL     (AV_CH_LAYOUT_OCTAGONAL|AV_CH_WIDE_LEFT|AV_CH_WIDE_RIGHT|AV_CH_TOP_BACK_LEFT|AV_CH_TOP_BACK_RIGHT|AV_CH_TOP_BACK_CENTER|AV_CH_TOP_FRONT_CENTER|AV_CH_TOP_FRONT_LEFT|AV_CH_TOP_FRONT_RIGHT)
+#define AV_CH_LAYOUT_STEREO_DOWNMIX    (AV_CH_STEREO_LEFT|AV_CH_STEREO_RIGHT)
+```
+
+**[2]. 打开音频设备**  
+     打开音频设备并创建音频处理线程，通过调用SDL_OpenAudio()或SDL_OpenAudioDevice()实现。输入参数是预期的参数，输出参数是实际参数  
+     1) SDL提供两种使音频设备取得音频数据方法：  
+        a. push，SDL以特定的频率调用回调函数，在回调函数中取得音频数据  
+        b. pull，用户程序以特定的频率调用SDL_QueueAudio()，向音频设备提供数据。此种情况wanted_spec.callback=NULL  
+     2) 音频设备打开后播放静音，不启动回调，调用SDL_PauseAudio(0)后启动回调，开始正常播放音频  
+        SDL_OpenAudioDevice()第一个参数为NULL时，等价于SDL_OpenAudio()  
+
+### 5.2 音频重采样  
+音频重采样在`audio_decode_frame()`中实现，`audio_decode_frame()`就是从音频frame队列中取出一个frame，按指定格式经过重采样后输出。  
+`audio_decode_frame()`函数名起得不太好，它只是进行重采样，并不进行解码，叫`audio_decode_frame()`可能更贴切。  
+重采样的细节很琐碎，直接看注释：  
+```c  
+/**
+ * Decode one audio frame and return its uncompressed size.
+ *
+ * The processed audio frame is decoded, converted if required, and
+ * stored in is->audio_buf, with size in bytes given by the return
+ * value.
+ */
+static int audio_decode_frame(VideoState *is)
+{
+    int data_size, resampled_data_size;
+    int64_t dec_channel_layout;
+    av_unused double audio_clock0;
+    int wanted_nb_samples;
+    Frame *af;
+
+    if (is->paused)
+        return -1;
+
+    do {
+#if defined(_WIN32)
+        while (frame_queue_nb_remaining(&is->sampq) == 0) {
+            if ((av_gettime_relative() - audio_callback_time) > 1000000LL * is->audio_hw_buf_size / is->audio_tgt.bytes_per_sec / 2)
+                return -1;
+            av_usleep (1000);
+        }
+#endif
+        // 若队列头部可读，则由af指向可读帧
+        if (!(af = frame_queue_peek_readable(&is->sampq)))
+            return -1;
+        frame_queue_next(&is->sampq);
+    } while (af->serial != is->audioq.serial);
+
+    // 根据frame中指定的音频参数获取缓冲区的大小
+    data_size = av_samples_get_buffer_size(NULL, af->frame->channels,   // 本行两参数：linesize，声道数
+                                           af->frame->nb_samples,       // 本行一参数：本帧中包含的单个声道中的样本数
+                                           af->frame->format, 1);       // 本行两参数：采样格式，不对齐
+
+    // 获取声道布局
+    dec_channel_layout =
+        (af->frame->channel_layout && af->frame->channels == av_get_channel_layout_nb_channels(af->frame->channel_layout)) ?
+        af->frame->channel_layout : av_get_default_channel_layout(af->frame->channels);
+    // 获取样本数校正值：若同步时钟是音频，则不调整样本数；否则根据同步需要调整样本数
+    wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
+
+    // is->audio_tgt是SDL可接受的音频帧数，是audio_open()中取得的参数
+    // 在audio_open()函数中又有“is->audio_src = is->audio_tgt”
+    // 此处表示：如果frame中的音频参数 == is->audio_src == is->audio_tgt，那音频重采样的过程就免了(因此时is->swr_ctr是NULL)
+    // 　　　　　否则使用frame(源)和is->audio_tgt(目标)中的音频参数来设置is->swr_ctx，并使用frame中的音频参数来赋值is->audio_src
+    if (af->frame->format        != is->audio_src.fmt            ||
+        dec_channel_layout       != is->audio_src.channel_layout ||
+        af->frame->sample_rate   != is->audio_src.freq           ||
+        (wanted_nb_samples       != af->frame->nb_samples && !is->swr_ctx)) {
+        swr_free(&is->swr_ctx);
+        // 使用frame(源)和is->audio_tgt(目标)中的音频参数来设置is->swr_ctx
+        is->swr_ctx = swr_alloc_set_opts(NULL,
+                                         is->audio_tgt.channel_layout, is->audio_tgt.fmt, is->audio_tgt.freq,
+                                         dec_channel_layout,           af->frame->format, af->frame->sample_rate,
+                                         0, NULL);
+        if (!is->swr_ctx || swr_init(is->swr_ctx) < 0) {
+            av_log(NULL, AV_LOG_ERROR,
+                   "Cannot create sample rate converter for conversion of %d Hz %s %d channels to %d Hz %s %d channels!\n",
+                    af->frame->sample_rate, av_get_sample_fmt_name(af->frame->format), af->frame->channels,
+                    is->audio_tgt.freq, av_get_sample_fmt_name(is->audio_tgt.fmt), is->audio_tgt.channels);
+            swr_free(&is->swr_ctx);
+            return -1;
+        }
+        // 使用frame中的参数更新is->audio_src，第一次更新后后面基本不用执行此if分支了，因为一个音频流中各frame通用参数一样
+        is->audio_src.channel_layout = dec_channel_layout;
+        is->audio_src.channels       = af->frame->channels;
+        is->audio_src.freq = af->frame->sample_rate;
+        is->audio_src.fmt = af->frame->format;
+    }
+
+    if (is->swr_ctx) {
+        // 重采样输入参数1：输入音频样本数是af->frame->nb_samples
+        // 重采样输入参数2：输入音频缓冲区
+        const uint8_t **in = (const uint8_t **)af->frame->extended_data;
+        // 重采样输出参数1：输出音频缓冲区尺寸
+        // 重采样输出参数2：输出音频缓冲区
+        uint8_t **out = &is->audio_buf1;
+        // 重采样输出参数：输出音频样本数(多加了256个样本)
+        int out_count = (int64_t)wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate + 256;
+        // 重采样输出参数：输出音频缓冲区尺寸(以字节为单位)
+        int out_size  = av_samples_get_buffer_size(NULL, is->audio_tgt.channels, out_count, is->audio_tgt.fmt, 0);
+        int len2;
+        if (out_size < 0) {
+            av_log(NULL, AV_LOG_ERROR, "av_samples_get_buffer_size() failed\n");
+            return -1;
+        }
+        // 如果frame中的样本数经过校正，则条件成立
+        if (wanted_nb_samples != af->frame->nb_samples) {
+            // 重采样补偿：不清楚参数怎么算的
+            if (swr_set_compensation(is->swr_ctx, (wanted_nb_samples - af->frame->nb_samples) * is->audio_tgt.freq / af->frame->sample_rate, 
+                                     wanted_nb_samples * is->audio_tgt.freq / af->frame->sample_rate) < 0) {
+                av_log(NULL, AV_LOG_ERROR, "swr_set_compensation() failed\n");
+                return -1;
+            }
+        }
+        av_fast_malloc(&is->audio_buf1, &is->audio_buf1_size, out_size);
+        if (!is->audio_buf1)
+            return AVERROR(ENOMEM);
+        // 音频重采样：返回值是重采样后得到的音频数据中单个声道的样本数
+        len2 = swr_convert(is->swr_ctx, out, out_count, in, af->frame->nb_samples);
+        if (len2 < 0) {
+            av_log(NULL, AV_LOG_ERROR, "swr_convert() failed\n");
+            return -1;
+        }
+        if (len2 == out_count) {
+            av_log(NULL, AV_LOG_WARNING, "audio buffer is probably too small\n");
+            if (swr_init(is->swr_ctx) < 0)
+                swr_free(&is->swr_ctx);
+        }
+        is->audio_buf = is->audio_buf1;
+        // 重采样返回的一帧音频数据大小(以字节为单位)
+        resampled_data_size = len2 * is->audio_tgt.channels * av_get_bytes_per_sample(is->audio_tgt.fmt);
+    } else {
+        // 未经重采样，则将指针指向frame中的音频数据
+        is->audio_buf = af->frame->data[0];
+        resampled_data_size = data_size;
+    }
+
+    audio_clock0 = is->audio_clock;
+    /* update the audio clock with the pts */
+    if (!isnan(af->pts))
+        is->audio_clock = af->pts + (double) af->frame->nb_samples / af->frame->sample_rate;
+    else
+        is->audio_clock = NAN;
+    is->audio_clock_serial = af->serial;
+#ifdef DEBUG
+    {
+        static double last_clock;
+        printf("audio: delay=%0.3f clock=%0.3f clock0=%0.3f\n",
+               is->audio_clock - last_clock,
+               is->audio_clock, audio_clock0);
+        last_clock = is->audio_clock;
+    }
+#endif
+    return resampled_data_size;
+}
+```
+
+        
 ## 6. 暂停/继续的实现方式  
 暂停/继续状态的切换是由用户按空格键实现的，每按一次空格键，暂停/继续的状态翻转一次。  
 
@@ -1983,3 +2187,4 @@ static void video_refresh(void *opaque, double *remaining_time)
 ## 8. 修改记录  
 2018-12-28  V1.0  初稿  
 2019-01-15  V1.0  增加FrameQueue数据结构说明  
+2019-01-15  V1.0  增加图像格式转换说明，新增音频重采样章节  
