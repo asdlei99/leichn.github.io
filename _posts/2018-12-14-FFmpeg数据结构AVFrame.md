@@ -589,7 +589,8 @@ void av_frame_unref(AVFrame *frame);
  */
 void av_frame_move_ref(AVFrame *dst, AVFrame *src);
 ```
-将src中所有数据拷贝到dst中，将复位src。  
+将src中所有数据拷贝到dst中，并复位src。  
+为避免内存泄漏，在调用`av_frame_move_ref(dst, src)`之前应先调用`av_frame_unref(dst)`  。
 
 ### 2.7 av_frame_get_buffer()  
 ```c  
