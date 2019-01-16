@@ -6,9 +6,11 @@ ffplay源码路径为“ffmpeg-4.1/fftools/ffplay.c”，“ffmpeg-4.1”为FFmp
 本文主要从如下几个方面进行分析：  
 [1]. 各工作线程的功能及数据流向  
 [2]. 音视频同步的实现方式，ffplay播放器中最核心的内容  
-[3]. 播放/暂停的实现方式  
-[5]. 播放速度控制  
-[6]. 指定播放点播放(seek，拖动进度条，快进/快退)的实现方式  
+[3]. 图像格式转换  
+[4]. 音频重采样  
+[5]. 播放/暂停的实现方式  
+[6]. 播放速度控制  
+[7]. 指定播放点播放(seek，拖动进度条，快进/快退)的实现方式  
 
 在尝试分析源码前，应先阅读如下参考文章：  
 [1]. [雷霄骅，视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)”  
@@ -1415,7 +1417,7 @@ synchronize_audio()
 ### 3.5 音视频同步到外部时钟  
 略
 
-## 4. 图像格式转换与图像显示  
+## 4. 图像格式转换  
 FFmpeg解码得到的视频帧的格式未必能被SDL支持，在这种情况下，需要进行图像格式转换，即将视频帧图像格式转换为SDL支持的图像格式，否则是无法正常显示的。  
 图像格式转换是在视频播放线程(主线程中)中的`upload_texture()`函数中实现的。调用链如下：  
 ```c  
@@ -1583,6 +1585,9 @@ static int realloc_texture(SDL_Texture **texture, Uint32 new_format, int new_wid
     frame->width, frame->height, frame->format, frame->width, frame->height,
     AV_PIX_FMT_BGRA, sws_flags, NULL, NULL, NULL);
 ```
+检查输入参数，第一个输入参数`*img_convert_ctx`对应形参`struct SwsContext *context`。
+如果context是NULL，调用`sws_getContext()`重新获取一个context。  
+如果context不是NULL，检查其他项输入参数是否和context中存储的各参数一样，若不一样，则先释放context再按照新的输入参数重新分配一个context。若一样，直接使用现有的context。
 
 ### 4.4 图像格式转换  
 ```c  
@@ -1596,8 +1601,55 @@ if (*img_convert_ctx != NULL) {
     }
 }
 ```
+上述代码有三个步骤：  
+1) `SDL_LockTexture()`锁定texture中的一个rect(此处是锁定整个texture)，锁定区具有只写属性，用于更新图像数据。`pixels`指向锁定区。  
+2) `sws_scale()`进行图像格式转换，转换后的数据写入`pixels`指定的区域。`pixels`包含4个指针，指向一组图像plane。  
+3) `SDL_UnlockTexture()`将锁定的区域解锁，将改变的数据更新到视频缓冲区中。  
+上述三步完成后，texture中已包含经过格式转换后新的图像数据。  
+补充一下细节，`sws_scale()`函数原型如下：  
+```c  
+/**
+ * Scale the image slice in srcSlice and put the resulting scaled
+ * slice in the image in dst. A slice is a sequence of consecutive
+ * rows in an image.
+ *
+ * Slices have to be provided in sequential order, either in
+ * top-bottom or bottom-top order. If slices are provided in
+ * non-sequential order the behavior of the function is undefined.
+ *
+ * @param c         the scaling context previously created with
+ *                  sws_getContext()
+ * @param srcSlice  the array containing the pointers to the planes of
+ *                  the source slice
+ * @param srcStride the array containing the strides for each plane of
+ *                  the source image
+ * @param srcSliceY the position in the source image of the slice to
+ *                  process, that is the number (counted starting from
+ *                  zero) in the image of the first row of the slice
+ * @param srcSliceH the height of the source slice, that is the number
+ *                  of rows in the slice
+ * @param dst       the array containing the pointers to the planes of
+ *                  the destination image
+ * @param dstStride the array containing the strides for each plane of
+ *                  the destination image
+ * @return          the height of the output slice
+ */
+int sws_scale(struct SwsContext *c, const uint8_t *const srcSlice[],
+              const int srcStride[], int srcSliceY, int srcSliceH,
+              uint8_t *const dst[], const int dstStride[]);
+```
 
-## 5. 音频重采样与音频播放  
+### 4.5 图像显示  
+texture对应一帧待显示的图像数据，得到texture后，执行如下步骤即可显示：  
+```c  
+SDL_RenderClear();                  // 使用特定颜色清空当前渲染目标
+SDL_RenderCopy();                   // 使用部分图像数据(texture)更新当前渲染目标
+SDL_RenderPresent(sdl_renderer);    // 执行渲染，更新屏幕显示
+```
+图像显示的流程细节可参考如下文章：  
+“[FFmpeg简易播放器的实现-视频播放](https://www.cnblogs.com/leisure_chn/p/10047035.html)”  
+
+## 5. 音频重采样  
 FFmpeg解码得到的音频帧的格式未必能被SDL支持，在这种情况下，需要进行音频重采样，即将音频帧格式转换为SDL支持的音频格式，否则是无法正常播放的。  
 音频重采样涉及两个步骤：  
 1)  打开音频设备时进行的准备工作：确定SDL支持的音频格式，作为后期音频重采样的目标格式  
@@ -2164,8 +2216,9 @@ static void video_refresh(void *opaque, double *remaining_time)
 ## 7. 播放速度控制  
 待补充  
 
-## 8. seek操作的实现方式  
-待补充  
+## 8. SEEK操作的实现方式  
+### 8.1 SEEK的触发方式  
+
 
 ## 9. 参考资料  
 [1] 雷霄骅，[视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)  
@@ -2183,6 +2236,7 @@ static void video_refresh(void *opaque, double *remaining_time)
 [13] [ffmpeg关于音频的总结(一)](https://blog.csdn.net/zhuweigangzwg/article/details/51499123)<https://blog.csdn.net/zhuweigangzwg/article/details/51499123>  
 [14] [FFmpeg关于nb_smples,frame_size以及profile的解释](https://blog.csdn.net/zhuweigangzwg/article/details/53335941)<https://blog.csdn.net/zhuweigangzwg/article/details/53335941>  
 [15] [ffplay frame queue分析](https://zhuanlan.zhihu.com/p/43564980), <https://zhuanlan.zhihu.com/p/43564980>  
+[16] [难点 seek 操作](https://github.com/rockcarry/ffplayer/wiki/%E9%9A%BE%E7%82%B9-seek-%E6%93%8D%E4%BD%9C), <https://github.com/rockcarry/ffplayer/wiki/%E9%9A%BE%E7%82%B9-seek-%E6%93%8D%E4%BD%9C>  
 
 ## 8. 修改记录  
 2018-12-28  V1.0  初稿  
