@@ -1275,39 +1275,7 @@ retry:
             }
 
             // 字幕播放
-            if (is->subtitle_st) {
-                    while (frame_queue_nb_remaining(&is->subpq) > 0) {
-                        sp = frame_queue_peek(&is->subpq);
-
-                        if (frame_queue_nb_remaining(&is->subpq) > 1)
-                            sp2 = frame_queue_peek_next(&is->subpq);
-                        else
-                            sp2 = NULL;
-
-                        if (sp->serial != is->subtitleq.serial
-                                || (is->vidclk.pts > (sp->pts + ((float) sp->sub.end_display_time / 1000)))
-                                || (sp2 && is->vidclk.pts > (sp2->pts + ((float) sp2->sub.start_display_time / 1000))))
-                        {
-                            if (sp->uploaded) {
-                                int i;
-                                for (i = 0; i < sp->sub.num_rects; i++) {
-                                    AVSubtitleRect *sub_rect = sp->sub.rects[i];
-                                    uint8_t *pixels;
-                                    int pitch, j;
-
-                                    if (!SDL_LockTexture(is->sub_texture, (SDL_Rect *)sub_rect, (void **)&pixels, &pitch)) {
-                                        for (j = 0; j < sub_rect->h; j++, pixels += pitch)
-                                            memset(pixels, 0, sub_rect->w << 2);
-                                        SDL_UnlockTexture(is->sub_texture);
-                                    }
-                                }
-                            }
-                            frame_queue_next(&is->subpq);
-                        } else {
-                            break;
-                        }
-                    }
-            }
+            ......
 
             // 删除当前读指针元素，读指针+1。若未丢帧，读指针从lastvp更新到vp；若有丢帧，读指针从vp更新到nextvp
             frame_queue_next(&is->pictq);
@@ -2224,17 +2192,17 @@ static void video_refresh(void *opaque, double *remaining_time)
 [1] 雷霄骅，[视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)  
 [2] [视频编解码基础概念]()<>  
 [3] [FFmpeg基础概念]()<>  
-[4] [零基础读懂视频播放器控制原理：ffplay播放器源代码分析](https://cloud.tencent.com/developer/article/1004559)<https://cloud.tencent.com/developer/article/1004559>  
+[4] [零基础读懂视频播放器控制原理：ffplay播放器源代码分析](https://cloud.tencent.com/developer/article/1004559), <https://cloud.tencent.com/developer/article/1004559>  
 [5] [An ffmpeg and SDL Tutorial, Tutorial 05: Synching Video](http://dranger.com/ffmpeg/ffmpegtutorial_all.html#tutorial05.html)  
 [6] [视频同步音频](https://zhuanlan.zhihu.com/p/44615401)<https://zhuanlan.zhihu.com/p/44615401>  
 [7] [音频同步视频](https://zhuanlan.zhihu.com/p/44680734)<https://zhuanlan.zhihu.com/p/44680734>  
-[8] [音视频同步(播放)原理](https://blog.csdn.net/zhuweigangzwg/article/details/25815851)<https://blog.csdn.net/zhuweigangzwg/article/details/25815851>  
-[9] [对ffmpeg的时间戳的理解笔记](https://blog.csdn.net/topsluo/article/details/76239136)<https://blog.csdn.net/topsluo/article/details/76239136>  
-[10] [ffmpeg音视频同步---视频同步到音频时钟](https://my.oschina.net/u/735973/blog/806117)<https://my.oschina.net/u/735973/blog/806117>  
-[11] [FFmpeg音视频同步原理与实现](https://www.jianshu.com/p/3578e794f6b5)<https://www.jianshu.com/p/3578e794f6b5>  
-[12] [FFmpeg学习4：音频格式转换](https://www.cnblogs.com/wangguchangqing/p/5851490.html)<https://www.cnblogs.com/wangguchangqing/p/5851490.html>  
-[13] [ffmpeg关于音频的总结(一)](https://blog.csdn.net/zhuweigangzwg/article/details/51499123)<https://blog.csdn.net/zhuweigangzwg/article/details/51499123>  
-[14] [FFmpeg关于nb_smples,frame_size以及profile的解释](https://blog.csdn.net/zhuweigangzwg/article/details/53335941)<https://blog.csdn.net/zhuweigangzwg/article/details/53335941>  
+[8] [音视频同步(播放)原理](https://blog.csdn.net/zhuweigangzwg/article/details/25815851), <https://blog.csdn.net/zhuweigangzwg/article/details/25815851>  
+[9] [对ffmpeg的时间戳的理解笔记](https://blog.csdn.net/topsluo/article/details/76239136), <https://blog.csdn.net/topsluo/article/details/76239136>  
+[10] [ffmpeg音视频同步---视频同步到音频时钟](https://my.oschina.net/u/735973/blog/806117), <https://my.oschina.net/u/735973/blog/806117>  
+[11] [FFmpeg音视频同步原理与实现](https://www.jianshu.com/p/3578e794f6b5), <https://www.jianshu.com/p/3578e794f6b5>  
+[12] [FFmpeg学习4：音频格式转换](https://www.cnblogs.com/wangguchangqing/p/5851490.html), <https://www.cnblogs.com/wangguchangqing/p/5851490.html>  
+[13] [ffmpeg关于音频的总结(一)](https://blog.csdn.net/zhuweigangzwg/article/details/51499123), <https://blog.csdn.net/zhuweigangzwg/article/details/51499123>  
+[14] [FFmpeg关于nb_smples,frame_size以及profile的解释](https://blog.csdn.net/zhuweigangzwg/article/details/53335941), <https://blog.csdn.net/zhuweigangzwg/article/details/53335941>  
 [15] [ffplay frame queue分析](https://zhuanlan.zhihu.com/p/43564980), <https://zhuanlan.zhihu.com/p/43564980>  
 [16] [难点 seek 操作](https://github.com/rockcarry/ffplayer/wiki/%E9%9A%BE%E7%82%B9-seek-%E6%93%8D%E4%BD%9C), <https://github.com/rockcarry/ffplayer/wiki/%E9%9A%BE%E7%82%B9-seek-%E6%93%8D%E4%BD%9C>  
 
