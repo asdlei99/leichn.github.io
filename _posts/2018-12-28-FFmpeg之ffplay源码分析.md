@@ -1,9 +1,15 @@
 ffplay是FFmpeg工程自带的简单播放器，使用FFmpeg提供的解码器和SDL库进行视频播放。  
-ffplay虽是一个简单的播放器，但代码涉及很多概念和细节，分析起来比较烦琐。  
-个人感觉分析过程还是有些困难的，业余时间也不多，断断续续持续了挺长一段时间。  
+
+ffplay虽然是一个很简单的播放器，但初次接触仍针感觉到概念和细节相当繁多，分析过程并不容易。个人业余时间并不多，分析过程断断续续持续了挺长一段时间，文章撰写仓促，无暇顾及细节，加之理解浅薄，错误在所难免。后续若有时间继续研究，随着理理解的深入将对此学习笔记逐步完善。  
+
+在尝试分析源码前，可先阅读如下参考文章作为铺垫：  
+[1]. [雷霄骅，视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)”  
+[2]. [视频编解码基础概念]()  
+[3]. [FFmpeg基础概念]()  
+[4]. [色彩空间与像素格式]()  
 
 ffplay源码路径为“ffmpeg-4.1/fftools/ffplay.c”，“ffmpeg-4.1”为FFmpeg工程顶层目录，版本为4.1。  
-本文主要从如下几个方面进行分析：  
+原本此篇笔记是记录在一份文档里的，写完后发现篇幅过长，那就拆分成下面一系列文章吧：  
 [1]. 各工作线程的功能及数据流向  
 [2]. 音视频同步的实现方式，ffplay播放器中最核心的内容  
 [3]. 图像格式转换  
@@ -11,11 +17,6 @@ ffplay源码路径为“ffmpeg-4.1/fftools/ffplay.c”，“ffmpeg-4.1”为FFmp
 [5]. 播放/暂停的实现方式  
 [6]. 播放速度控制  
 [7]. 指定播放点播放(seek，拖动进度条，快进/快退)的实现方式  
-
-在尝试分析源码前，应先阅读如下参考文章：  
-[1]. [雷霄骅，视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)”  
-[2]. [视频编解码基础概念]()  
-[3]. [FFmpeg基础概念]()  
 
 ## 1. 基本原理  
 ### 1.1 播放器基本原理  
@@ -2186,8 +2187,176 @@ static void video_refresh(void *opaque, double *remaining_time)
 待补充  
 
 ## 8. SEEK操作的实现方式  
-### 8.1 SEEK的触发方式  
+SEEK操作就是由用户干预而改变播放进度的实现方式，比如鼠标拖动播放进度条。  
 
+### 8.1 SEEK相关的数据结构及SEEK标志的含义  
+相关数据变量定义如下：  
+```c  
+typedef struct VideoState {
+    ......
+    int seek_req;                   // 标识一次SEEK请求
+    int seek_flags;                 // SEEK标志，诸如AVSEEK_FLAG_BYTE等
+    int64_t seek_pos;               // SEEK的目标位置(当前位置+增量)
+    int64_t seek_rel;               // 本次SEEK的位置增量
+    ......
+} VideoState;
+```
+
+
+“VideoState.seek_flags”表示SEEK标志。SEEK标志的类型定义如下：  
+```c  
+#define AVSEEK_FLAG_BACKWARD 1 ///< seek backward
+#define AVSEEK_FLAG_BYTE     2 ///< seeking based on position in bytes
+#define AVSEEK_FLAG_ANY      4 ///< seek to any frame, even non-keyframes
+#define AVSEEK_FLAG_FRAME    8 ///< seeking based on frame number
+```
+SEEK目标播放点(后文简称SEEK点)的确定，根据SEEK标志的不同，分为如下几种情况：  
+[1]. `AVSEEK_FLAG_BYTE`：SEEK点对应文件中的位置(字节表示)。有些解复用器可能不支持这种情况。  
+[2]. `AVSEEK_FLAG_FRAME`：SEEK点对应stream中frame序号(?frame序号还是frame 的PTS?)，stream由stream_index指定。有些解复用器可能不支持这种情况。  
+[3]. 如果不含上述两种标志且stream_index有效：SEEK点对应时间戳，单位是stream中的timebase，stream由stream_index指定。SEEK点的值由“目标frame中的pts(秒) × stream中的timebase”得到。  
+[4]. 如果不含上述两种标志且stream_index是-1：SEEK点对应时间戳，单位是AV_TIME_BASE。SEEK点的值由“目标frame中的pts(秒) × AV_TIME_BASE”得到。  
+[5]. `AVSEEK_FLAG_ANY`：SEEK点对应帧序号(待确定)，播放点可停留在任意帧(包括非关键帧)。有些解复用器可能不支持这种情况。  
+[6]. `AVSEEK_FLAG_BACKWARD`：忽略。  
+
+其中`AV_TIME_BASE`是FFmpeg内部使用的时间基，定义如下：  
+```c  
+/**
+ * Internal time base represented as integer
+ */
+
+#define AV_TIME_BASE            1000000
+```
+AV_TIME_BASE表示1000000us。  
+
+### 8.2 SEEK的触发方式  
+当用户按下“PAGEUP”，“PAGEDOWN”，“UP”，“DOWN”，“LEFT”，“RHIGHT”按键以及用鼠标拖动进度条时，引起播放进度变化，会触发SEEK操作。  
+在`event_loop()`函数进行的SDL消息处理中有如下代码片段：  
+```c  
+case SDLK_LEFT:
+    incr = seek_interval ? -seek_interval : -10.0;
+    goto do_seek;
+case SDLK_RIGHT:
+    incr = seek_interval ? seek_interval : 10.0;
+    goto do_seek;
+case SDLK_UP:
+    incr = 60.0;
+    goto do_seek;
+case SDLK_DOWN:
+    incr = -60.0;
+do_seek:
+        if (seek_by_bytes) {
+            pos = -1;
+            if (pos < 0 && cur_stream->video_stream >= 0)
+                pos = frame_queue_last_pos(&cur_stream->pictq);
+            if (pos < 0 && cur_stream->audio_stream >= 0)
+                pos = frame_queue_last_pos(&cur_stream->sampq);
+            if (pos < 0)
+                pos = avio_tell(cur_stream->ic->pb);
+            if (cur_stream->ic->bit_rate)
+                incr *= cur_stream->ic->bit_rate / 8.0;
+            else
+                incr *= 180000.0;
+            pos += incr;
+            stream_seek(cur_stream, pos, incr, 1);
+        } else {
+            pos = get_master_clock(cur_stream);
+            if (isnan(pos))
+                pos = (double)cur_stream->seek_pos / AV_TIME_BASE;
+            pos += incr;
+            if (cur_stream->ic->start_time != AV_NOPTS_VALUE && pos < cur_stream->ic->start_time / (double)AV_TIME_BASE)
+                pos = cur_stream->ic->start_time / (double)AV_TIME_BASE;
+            stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);
+        }
+    break;
+```
+seek_by_bytes生效(对应AVSEEK_FLAG_BYTE标志)时，SEEK点对应文件中的位置，上述代码中设置了对应1秒数据量的播放增量；不生效时，SEEK点对应于播放时刻。我们暂不考虑seek_by_bytes生效这种情况。  
+此函数实现如下功能：  
+[1]. 首先确定SEEK操作的播放进度增量(SEEK增量)和目标播放点(SEEK点)，seek_by_bytes不生效时，将增量设为选定值，如10.0秒(用户按“RHIGHT”键的情况)。  
+[2]. 将同步主时钟加上进度增量，即可得到SEEK点。先将相关数值记录下来，供后续SEEK操作时使用。`stream_seek(cur_stream, (int64_t)(pos * AV_TIME_BASE), (int64_t)(incr * AV_TIME_BASE), 0);`就是记录目标播放点和播放进度增量两个参数的，精确到微秒。调用这个函数的前提是，我们只考虑8.1节中的第[4]种情况。  
+
+再看一下`stream_seak()`函数的实现，仅仅是变量赋值：  
+```c  
+/* seek in the stream */
+static void stream_seek(VideoState *is, int64_t pos, int64_t rel, int seek_by_bytes)
+{
+    if (!is->seek_req) {
+        is->seek_pos = pos;
+        is->seek_rel = rel;
+        is->seek_flags &= ~AVSEEK_FLAG_BYTE;
+        if (seek_by_bytes)
+            is->seek_flags |= AVSEEK_FLAG_BYTE;
+        is->seek_req = 1;
+        SDL_CondSignal(is->continue_read_thread);
+    }
+}
+```
+
+### 8.3 SEEK操作的实现  
+在解复用线程主循环中处理了SEEK操作。  
+```c  
+static int read_thread(void *arg)
+{
+    ......
+    for (;;) {
+        if (is->seek_req) {
+            int64_t seek_target = is->seek_pos;
+            int64_t seek_min    = is->seek_rel > 0 ? seek_target - is->seek_rel + 2: INT64_MIN;
+            int64_t seek_max    = is->seek_rel < 0 ? seek_target - is->seek_rel - 2: INT64_MAX;
+// FIXME the +-2 is due to rounding being not done in the correct direction in generation
+//      of the seek_pos/seek_rel variables
+
+            ret = avformat_seek_file(is->ic, -1, seek_min, seek_target, seek_max, is->seek_flags);
+            if (ret < 0) {
+                av_log(NULL, AV_LOG_ERROR,
+                       "%s: error while seeking\n", is->ic->url);
+            } else {
+                if (is->audio_stream >= 0) {
+                    packet_queue_flush(&is->audioq);
+                    packet_queue_put(&is->audioq, &flush_pkt);
+                }
+                if (is->subtitle_stream >= 0) {
+                    packet_queue_flush(&is->subtitleq);
+                    packet_queue_put(&is->subtitleq, &flush_pkt);
+                }
+                if (is->video_stream >= 0) {
+                    packet_queue_flush(&is->videoq);
+                    packet_queue_put(&is->videoq, &flush_pkt);
+                }
+                if (is->seek_flags & AVSEEK_FLAG_BYTE) {
+                   set_clock(&is->extclk, NAN, 0);
+                } else {
+                   set_clock(&is->extclk, seek_target / (double)AV_TIME_BASE, 0);
+                }
+            }
+            is->seek_req = 0;
+            is->queue_attachments_req = 1;
+            is->eof = 0;
+            if (is->paused)
+                step_to_next_frame(is);
+        }
+    }
+    ......
+}
+```
+上述代码中的SEEK操作执行如下步骤：  
+[1]. 调用`avformat_seek_file()`完成解复用器中的SEEK点切换操作  
+```c  
+// 函数原型
+int avformat_seek_file(AVFormatContext *s, int stream_index, int64_t min_ts, int64_t ts, int64_t max_ts, int flags);
+
+// 调用代码
+ret = avformat_seek_file(is->ic, -1, seek_min, seek_target, seek_max, is->seek_flags);
+```
+这个函数会等待SEEK操作完成才返回。实际的播放点力求最接近参数`ts`，并确保在[min_ts, max_ts]区间内，之所以播放点不一定在`ts`位置，是因为`ts`位置未必能正常播放。  
+函数与SEEK点相关的三个参数(实参“seek_min”，“seek_target”，“seek_max”)取值方式与SEEK标志有关(实参“is->seek_flags”)，此处“is->seek_flags”值为0，对应8.1节中的第[4]中情况。  
+[2]. 冲洗各解码器缓存帧，使当前播放序列中的帧播放完成，然后再开始新的播放序列(播放序列由各数据结构中的“serial”变量标志，此处不展开)。代码如下：  
+```c  
+if (is->video_stream >= 0) {
+    packet_queue_flush(&is->videoq);
+    packet_queue_put(&is->videoq, &flush_pkt);
+}
+```
+[3]. 清除本次SEEK请求标志`is->seek_req = 0;`  
 
 ## 9. 参考资料  
 [1] 雷霄骅，[视音频编解码技术零基础学习方法](https://blog.csdn.net/leixiaohua1020/article/details/18893769)  
@@ -2211,3 +2380,4 @@ static void video_refresh(void *opaque, double *remaining_time)
 2018-12-28  V1.0  初稿  
 2019-01-15  V1.0  增加FrameQueue数据结构说明  
 2019-01-15  V1.0  增加图像格式转换说明，新增音频重采样章节  
+2019-01-18  V1.0  增加SEEK操作说明章节  
