@@ -2,7 +2,7 @@
 调用ffmpeg的avformat_open_input()及av_read_frame()函数时，由于输入源(文件或TCP/UDP流等)的阻塞性质，导致这两个函数阻塞，线程阻塞后无法响应其他事件。
 
 # 二、解决方法
-## 1. 打开输入源时设为非阻塞(不推荐)
+## 1. 打开输入源时设为非阻塞(不推荐)  
 ```c
 AVFormatContext *p_ifmt_ctx = NULL;  
 p_ifmt_ctx = avformat_alloc_context();  
@@ -11,13 +11,14 @@ avformat_open_input(&p_ifmt_ctx, in_fname, 0, 0);
 ......
 ```
 
-## 2. 若输入源是阻塞型FIFO文件
+## 2. 若输入源是阻塞型FIFO文件  
 需要**同时使用**如下两种方法  
 **1 避免读空FIFO导致阻塞：**  
 使用select/poll等设置超时时间，判断FIFO里有数据后再进行读操作：  
-```c
-fd = fifo_open_for_read("/tmp/audio_ts.fifo", true);  
-avformat_open_input(&p_ifmt_ctx, (char *)in_fname, 0, 0);  
+```c  
+char *in_fname = "/tmp/audio_ts.fifo";  
+fd = fifo_open_for_read(in_fname, true);  
+avformat_open_input(&p_ifmt_ctx, in_fname, 0, 0);  
 ...  
 poll_fd.fd = fd;  
 poll_fd.events = POLLIN;  
@@ -43,7 +44,7 @@ ret = av_read_frame(p_ifmt_ctx, &pkt);
 **2 避免TS流中只有表无实际音视频数据导致的阻塞：**  
 利用IO中断回调函数，同如下第3步描述
 
-## 3. 若输入源是TCP/UDP网址
+## 3. 若输入源是TCP/UDP网址  
 利用IO中断回调函数(数据结构AVIOInterruptCB)决定退出时机：  
 ```c
 static int condition;
@@ -67,9 +68,9 @@ static int decode_interrupt_cb(void *ctx)
     }
 }
 ```
-# 三、原理分析
+# 三、原理分析  
 
-## 1. avformat_alloc_context()解析
+## 1. avformat_alloc_context()解析  
 ```c
 main()->
 stream_open()->
@@ -79,7 +80,7 @@ avformat_get_context_defaults()->
 s->io_open  = io_open_default;
 ```
 
-## 2. avformat_open_input()解析
+## 2. avformat_open_input()解析  
 ```c
 main()->
 stream_open()->
