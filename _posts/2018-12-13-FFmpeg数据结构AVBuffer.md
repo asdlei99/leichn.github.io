@@ -1,4 +1,4 @@
-本文基于FFmpeg 4.1版本。  
+本文为作者原创，转载请注明出处：<https://www.cnblogs.com/leisure_chn/p/10399048.html>  
 
 AVBuffer是FFmpeg中很常用的一种缓冲区，缓冲区使用引用计数(reference-counted)机制。  
 AVBufferRef则对AVBuffer缓冲区提供了一层封装，最主要的是作引用计数处理，实现了一种安全机制。用户不应直接访问AVBuffer，应通过AVBufferRef来访问AVBuffer，以保证安全。  
@@ -35,7 +35,6 @@ struct AVBuffer {
     int flags;
 };
 ```
-用户不应直接使用AVBuffer。  
 - data: 缓冲区地址  
 - size: 缓冲区大小  
 - refcount: 引用计数值  

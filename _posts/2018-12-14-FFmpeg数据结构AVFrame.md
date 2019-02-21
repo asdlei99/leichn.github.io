@@ -1,3 +1,5 @@
+本文为作者原创，转载请注明出处：<https://www.cnblogs.com/leisure_chn/p/10404502.html>  
+
 本文基于FFmpeg 4.1版本。  
 
 ## 1. 数据结构定义  
@@ -6,7 +8,7 @@ struct AVFrame定义于<libavutil/frame.h>
 struct AVFrame frame;
 ```
 AVFrame中存储的是经过解码后的原始数据。在解码中，AVFrame是解码器的输出；在编码中，AVFrame是编码器的输入。下图中，“decoded frames”的数据类型就是AVFrame：  
-<pre>
+```
  _______              ______________
 |       |            |              |
 | input |  demuxer   | encoded data |   decoder
@@ -24,7 +26,7 @@ AVFrame中存储的是经过解码后的原始数据。在解码中，AVFrame是
 | file   |   muxer   | packets      |   encoder
 |________|           |______________|
 
-</pre>
+```
 
 AVFrame数据结构非常重要，它的成员非常多，导致数据结构定义篇幅很长。下面引用的数据结构定义中省略冗长的注释以及大部分成员，先总体说明AVFrame的用法，然后再将一些重要成员摘录出来单独进行说明：  
 ```c
@@ -96,7 +98,7 @@ AVFrame的用法：
 ```
 存储原始帧数据(未编码的原始图像或音频格式，作为解码器的输出或编码器的输入)。  
 data是一个指针数组，数组的每一个元素是一个指针，指向视频中图像的某一plane或音频中某一声道的plane。  
-关于图像plane的详细说明参考“[色彩空间与像素格式]()”，音频plane的详细说明参数“[原始音频格式]()”。下面简单说明：  
+关于图像plane的详细说明参考“[色彩空间与像素格式](https://www.cnblogs.com/leisure_chn/p/10290575.html)”，音频plane的详细说明参数“[ffplay源码解析6-音频重采样 6.1.1节](https://www.cnblogs.com/leisure_chn/p/10312713.html)”。下面简单说明：  
 对于packet格式，一幅YUV图像的Y、U、V交织存储在一个plane中，形如YUVYUV...，data[0]指向这个plane；  
                 一个双声道的音频帧其左声道L、右声道R交织存储在一个plane中，形如LRLRLR...，data[0]指向这个plane。  
 对于planar格式，一幅YUV图像有Y、U、V三个plane，data[0]指向Y plane，data[1]指向U plane，data[2]指向V plane；  
@@ -143,7 +145,7 @@ linesize可能会因性能上的考虑而填充一些额外的数据，因此lin
      */
     uint8_t **extended_data;
 ```
-<font color=red>????extended_data是干啥的????<font>
+<font color=red>????extended_data是干啥的????</font>
 对于视频来说，直接指向data[]成员。  
 对于音频来说，packet格式音频只有一个plane，一个音频帧中各个声道的采样点交织存储在此plane中；planar格式音频每个声道一个plane。在多声道planar格式音频中，必须使用extended_data才能访问所有声道，什么意思？ 
 在有效的视频/音频frame中，data和extended_data两个成员都必须设置有效值。  
@@ -391,8 +393,8 @@ enum AVPictureType {
 AVBuffer是FFmpeg中很常用的一种缓冲区，缓冲区使用引用计数(reference-counted)机制。  
 AVBufferRef则对AVBuffer缓冲区提供了一层封装，最主要的是作引用计数处理，实现了一种安全机制。用户不应直接访问AVBuffer，应通过AVBufferRef来访问AVBuffer，以保证安全。  
 FFmpeg中很多基础的数据结构都包含了AVBufferRef成员，来间接使用AVBuffer缓冲区。  
-相关内容参考“[FFmpeg数据结构AVBuffer]()”  
-<font color=red>????帧的数据缓冲区AVBuffer就是前面的data成员，用户不应直接使用data成员，应通过buf成员间接使用data成员。那extended_data又是做什么的呢????<font>  
+相关内容参考“[FFmpeg数据结构AVBuffer](https://www.cnblogs.com/leisure_chn/p/10399048.html)”  
+<font color=red>????帧的数据缓冲区AVBuffer就是前面的data成员，用户不应直接使用data成员，应通过buf成员间接使用data成员。那extended_data又是做什么的呢????</font>  
 
 如果buf[]的所有元素都为NULL，则此帧不会被引用计数。必须连续填充buf[] - 如果buf[i]为非NULL，则对于所有j<i，buf[j]也必须为非NULL。  
 每个plane最多可以有一个AVBuffer，一个AVBufferRef指针指向一个AVBuffer，一个AVBuffer引用指的就是一个AVBufferRef指针。  
