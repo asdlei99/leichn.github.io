@@ -425,9 +425,9 @@ end:
 ```
 
 **函数参数说明：**  
-输入参数“const char *filters_descr”以字符串形式提供滤镜选项，例如参数为“transpose=cclock,pad=iw+80:ih:40”时，表示将视频帧逆时针旋转90度，然后在视频左右各填充40像素的黑边。
+输入参数`const char *filters_descr`以字符串形式提供滤镜选项，例如参数为`transpose=cclock,pad=iw+80:ih:40`时，表示将视频帧逆时针旋转90度，然后在视频左右各填充40像素的黑边。
 
-输入参数“input_vfmt_t *vfmt”用于描述提供给滤镜图的视频帧和格式，在配置滤镜图中的第一个滤镜buffer时需要为滤镜提供参数，就是从vfmt参数转换得到。  
+输入参数`input_vfmt_t *vfmt`用于描述提供给滤镜图的视频帧和格式，在配置滤镜图中的第一个滤镜buffer时需要为滤镜提供参数，就是从vfmt参数转换得到。  
 input_vfmt_t为自定义数据结构，定义如下：  
 ```c  
 typedef struct {
@@ -440,7 +440,7 @@ typedef struct {
 }   input_vfmt_t;
 ```
 
-输出参数“filter_ctx_t *fctx”用于返回生成滤镜图的信息，供调用者使用。  
+输出参数`filter_ctx_t *fctx`用于返回生成滤镜图的信息，供调用者使用。  
 filter_ctx_t为自定义数据结构，定义如下：  
 ```c  
 typedef struct {
@@ -448,6 +448,7 @@ typedef struct {
     AVFilterContext *bufsrc_ctx;
     AVFilterGraph   *filter_graph;
 }   filter_ctx_t;
+```
 此结构中三个成员：bufsrc_ctx用于滤镜图的输入，bufsink_ctx用于滤镜图的输出，filter_graph用于销毁滤镜图。  
 <font color-red>TODO: 一个滤镜图可能含多个滤镜链，即可能有多个输入节点(bufsrc_ctx)或多个输出节点(bufsink_ctx)，此数据结构应改进为支持多输入和多输出</font>  
 
@@ -605,7 +606,7 @@ filters_descr描述的滤镜如下图所示：
 示例2：编码器的输出作为滤镜的输入，滤镜的输出可以播放，可直观观察滤镜效果。  
 示例3：测试图作为滤镜的输入，滤镜的输出可以播放，可直接观察滤镜效果。  
 
-### 3.1 示例1：官方例程  
+### 4.1 示例1：官方例程  
 [https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c](https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c)  
 官方例程实现的功能是：打开一个视频文件，解码后经过滤镜处理，然后以简单灰度模式在命令窗口中播放视频帧。  
 
@@ -621,7 +622,7 @@ filters_descr描述的滤镜如下图所示：
 
 例程核心是滤镜相关的代码，因此视频帧播放部分做了简化处理。  
 
-### 3.2 示例2：可播放版本  
+### 4.2 示例2：可播放版本  
 官方示例主要演示滤镜API的使用方法，代码量较少，简化了视频播放部分，这样使得滤镜的处理效果无法直观观察。示例2针对此问题，在官方代码基础上增加了正常的视频播放效果。  
 
 代码说明：在[https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/](https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/)目录下有如下几个文件  
@@ -645,7 +646,7 @@ vfilter_filesrc.c是示例2的主程序，实现了打开视频文件，解码�
 ![ring](https://leichn.github.io/img/ffmpeg_filter/ring.jpg "ring")  
 ![ring_vf](https://leichn.github.io/img/ffmpeg_filter/ring_vf.jpg "ring_vf")  
 
-### 3.3 示例3：测试图作输入源  
+### 4.3 示例3：测试图作输入源  
 示例3使用测试图(test pattern)作为滤镜的输入，测试图(test pattern)是由FFmpeg内部产生的测试图案，用于测试非常方便。  
 因测试图直接输出原始视频帧，不需解码器，因此示例3中用到AVFilter库，不需要用到AVFormat库。  
 
@@ -770,8 +771,8 @@ ffplay -f lavfi -i smptebars -vf transpose=cclock,pad=iw+80:ih:40
 经滤镜处理的效果如图所示：  
 ![smptebars_vf](https://leichn.github.io/img/ffmpeg_filter/smptebars_vf.jpg "smptebars_vf")  
 
-## 4. 参考资料  
+## 5. 参考资料  
 [1] 刘歧，[FFmpeg Filter深度应用](https://yq.aliyun.com/articles/628153?utm_content=m_1000014065)，<https://yq.aliyun.com/articles/628153?utm_content=m_1000014065>  
 
-## 5. 修改纪录  
+## 6. 修改纪录  
 2019-02-24  V1.0  初稿  
