@@ -583,14 +583,14 @@ buffersink滤镜是滤镜链中的最后一个滤镜，因此只有输入引脚�
                                    &inputs, &outputs, NULL);
 ```
 filters_descr描述的滤镜如下图所示：  
-![pic1](https://leichn.github.io/img/ffmpeg_filter/pic0.jpg "pic1")  
+![pic1](https://leichn.github.io/img/ffmpeg_filter/pic1.jpg "pic1")  
 
 调用avfilter_graph_parse_ptr()后，滤镜图如下所示：  
 ![pic2](https://leichn.github.io/img/ffmpeg_filter/pic2.jpg "pic2")  
 
 ### 3.1.3. 建立滤镜连接
 调用`avfilter_graph_config()`将上一步得到的滤镜图进行配置，建立滤镜间的连接，此步完成后即生了一个可用的滤镜图，如下图所示：  
-![pic3](https://leichn.github.io/img/ffmpeg_filter/pic0.jpg "pic3")  
+![pic3](https://leichn.github.io/img/ffmpeg_filter/pic3.jpg "pic3")  
 
 ## 3.2 使用滤镜处理原始帧  
 配置好滤镜后，可在音视频处理过程中使用滤镜。使用滤镜比配置滤镜简单很多，主要调用如下两个API函数：  
@@ -727,12 +727,13 @@ end:
     return ret;
 }
 ```
-测试源的本质是使用FFmpeg提供的用于产生测试图案的滤镜来生成视频数据。具体到代码实现层面，将testsrc/smptebars等滤镜代替常用的buffer滤镜作为源滤镜，然后直接与buffersink滤镜相连，以输出没底数据，如下图：  
-![pic4](https://leichn.github.io/img/ffmpeg_filter/pic2.jpg "pic4")  
+测试源的本质是使用FFmpeg提供的用于产生测试图案的滤镜来生成视频数据。具体到代码实现层面，将testsrc/smptebars等滤镜代替常用的buffer滤镜作为源滤镜，然后直接与buffersink滤镜相连，以输出测试图案，如下图：  
+![pic4](https://leichn.github.io/img/ffmpeg_filter/pic4.jpg "pic4")  
 
 编译：`make vf_test`，将生成vf_test可执行文件  
 测试：测试滤镜选项`-vf transpose=cclock,pad=iw+80:ih:40`，表示先将视频逆时针旋转90度，然后将视频左右两边各增加40像素宽度的黑边  
-1. 使用“testsrc”测试图作输入源  
+
+**使用“testsrc”测试图作输入源**  
 运行如下命令：  
 ```
 ffplay -f lavfi -i testsrc
@@ -751,8 +752,7 @@ ffplay -f lavfi -i testsrc -vf transpose=cclock,pad=iw+80:ih:40
 经滤镜处理的效果如图所示：  
 ![testsrc_vf](https://leichn.github.io/img/ffmpeg_filter/testsrc_vf.jpg "testsrc_vf")  
 
-
-2. 使用“smptebars”测试图作输入源  
+**使用“smptebars”测试图作输入源**  
 运行如下命令：  
 ```
 ffplay -f lavfi -i smptebars
