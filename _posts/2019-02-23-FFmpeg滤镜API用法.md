@@ -714,7 +714,7 @@ static int open_testsrc(const char *filter, const input_vfmt_t *vfmt, filter_ctx
     vfmt->frame_rate = av_buffersink_get_frame_rate(fctx->bufsink_ctx);
 
     av_log(NULL, AV_LOG_INFO, "probe video format: "
-           "%dx%d, pix_fmt %d, SAR %d/%d, tb {%d, %d}, rate {%d, %d}\n",
+           "%dx%d, pix_fmt %d, SAR %d/%d, tb %d/%d, rate %d/%d\n",
            vfmt->width, vfmt->height, vfmt->pix_fmt,
            vfmt->sar.num, vfmt->sar.den,
            vfmt->time_base.num, vfmt->time_base.den,
@@ -771,8 +771,19 @@ ffplay -f lavfi -i smptebars -vf transpose=cclock,pad=iw+80:ih:40
 经滤镜处理的效果如图所示：  
 ![smptebars_vf](https://leichn.github.io/img/ffmpeg_filter/smptebars_vf.jpg "smptebars_vf")  
 
-## 5. 参考资料  
+## 5. 遗留问题  
+[1] 不支持多输入多输出的复杂滤镜图，待改进验证  
+[2] 如何使用API以类似打开普通输入文件的方法来获取测试图的格式，即`ffprobe -f lavfi -i testsrc`的内部原理是什么？  
+```
+think@linux-1phi:~> ffprobe -f lavfi -i testsrc
+ffprobe version 4.1 Copyright (c) 2007-2018 the FFmpeg developers
+Input #0, lavfi, from 'testsrc':
+  Duration: N/A, start: 0.000000, bitrate: N/A
+    Stream #0:0: Video: rawvideo (RGB[24] / 0x18424752), rgb24, 320x240 [SAR 1:1 DAR 4:3], 25 tbr, 25 tbn, 25 tbc
+```
+
+## 6. 参考资料  
 [1] 刘歧，[FFmpeg Filter深度应用](https://yq.aliyun.com/articles/628153?utm_content=m_1000014065)，<https://yq.aliyun.com/articles/628153?utm_content=m_1000014065>  
 
-## 6. 修改纪录  
+## 7. 修改纪录  
 2019-02-24  V1.0  初稿  
