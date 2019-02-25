@@ -1,5 +1,6 @@
+本文为作者原创，转载请注明出处：<https://www.cnblogs.com/leisure_chn/p/10434209.html>  
 
-## 1 overlay技术简介  
+## 1. overlay技术简介  
 overlay技术又称视频叠加技术。overlay视频技术使用非常广泛，常见的例子有，电视屏幕右上角显示的电视台台标，以及画中画功能，画中画是指在一个大的视频播放窗口中还存在一个小播放窗口，两个窗口不同的视频内容同时播放。  
 
 overlay技术中涉及两个窗口，通常把较大的窗口称作背景窗口，较小的窗口称作前景窗口，背景窗口或前景窗口里都可以播放视频或显示图片。FFmpeg中使用overlay滤镜可实现视频叠加技术。  
@@ -25,7 +26,7 @@ overlay滤镜说明如下：
 overlay滤镜相关参数示意图如下：  
 ![overlay_filter](https://leichn.github.io/img/ffmpeg_overlay/overlay_filter.png "overlay_filter")  
 
-## 2 命令行用法  
+## 2. 命令行用法  
 可先参考“[FFmpeg使用基础](https://www.cnblogs.com/leisure_chn/p/10297002.html)”了解命令行用法基础  
 
 overlay命令行基本格式如下：  
@@ -128,12 +129,26 @@ Stream mapping:
 
 视频开始几秒处播放有些异常，声音播放几秒后图像才开始播放，原因不太清楚。  
 
-## 3 API用法  
-待
+## 3. API用法  
 
-## 4 参考资料  
+使用滤镜API编程，解析不同的滤镜选项，以达到和命令行中输入命令同样的效果。  
+
+例程使用“[FFmpeg滤镜API用法与实例解析](https://www.cnblogs.com/leisure_chn/p/10429145.html)”中第4.2节的示例程序  
+代码目录[https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/](https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/)  
+下载代码，进入代码目录，在命令行运行`make vf_file`命令，将生成vf_file可执行文件  
+在命令行运行`./vf_file ring.flv -vf "movie=ring_100x87.png[logo];[in][logo]overlay=W-w:56"`  
+测试效果为：  
+![ring_logo_t.jpg](https://leichn.github.io/img/ffmpeg_overlay/ring_logo_t.jpg "ring_logo_t.jpg")  
+因为例程尚不支持多输入的方式，所以上述测试命令中借助了movie滤镜来加载第二个输入，这条命令和下面这条命令效果是一样的  
+`ffplay ring.mp4 -i ring_100x87.png -filter_complex overlay=W-w:56`  
+
+## 4. 遗留问题  
+第3节例程不支持多输入方式，借助了movie滤镜变通实现，多输入情况下API如何编程？待分析如下命令中多输入选项的解析处理方式：  
+`ffplay ring.mp4 -i ring_100x87.png -filter_complex overlay=W-w:56`
+
+## 5. 参考资料  
 [1] [为什么很多人把视频上下加黑条当做“电影感”？](https://www.zhihu.com/question/274830832)  
 [2] [用于编码视频文件的视频预设](https://help.adobe.com/zh_CN/scene7/using/WSE86ACF2B-BD50-4c48-A1D7-9CD4405B62D0.html)  
 
-## 5. 修改记录  
+## 6. 修改记录  
 2019-02-16  V1.0  首次整理  
