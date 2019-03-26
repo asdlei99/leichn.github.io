@@ -2,7 +2,9 @@
 
 在FFmpeg中，滤镜(filter)处理的是未压缩的原始音视频数据(RGB/YUV视频帧，PCM音频帧等)。一个滤镜的输出可以连接到另一个滤镜的输入，多个滤镜可以连接起来，构成滤镜链/滤镜图，各种滤镜的组合为FFmpeg提供了丰富的音视频处理功能。  
 
-比较常用的滤镜有：scale、trim、overlay、rotate、movie、yadif。scale滤镜用于缩放，trim滤镜用于帧级剪切，overlay滤镜用于视频叠加，rotate滤镜实现旋转，movie滤镜可以加载第三方的视频，yadif滤镜可以去隔行。
+比较常用的滤镜有：scale、trim、overlay、rotate、movie、yadif。scale滤镜用于缩放，trim滤镜用于帧级剪切，overlay滤镜用于视频叠加，rotate滤镜实现旋转，movie滤镜可以加载第三方的视频，yadif滤镜可以去隔行。  
+
+本文首先介绍滤镜的原理，然后通过实例详细介绍滤镜API使用方法。  
 
 ## 1. 滤镜的构成及命令行用法  
 本节内容节选自“[FFmpeg使用基础](https://www.cnblogs.com/leisure_chn/p/10297002.html)”，翻译整理自《FFmpeg Basics》及官网文档“[Documentation-ffmpeg](http://ffmpeg.org/ffmpeg.html)”。
@@ -611,8 +613,13 @@ filters_descr描述的滤镜如下图所示：
 示例2：编码器的输出作为滤镜的输入，滤镜的输出可以播放，可直观观察滤镜效果。  
 示例3：测试图作为滤镜的输入(而测试图本身也是由特殊滤镜生成)，滤镜的输出可以播放，可直接观察滤镜效果。  
 
+示例1源码下载：[https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c](https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c)  
+示例2与示例3源码下载(SHELL中运行如下命令)：  
+```sh
+svn checkout https://github.com/leichn/exercises/trunk/source/ffmpeg/ffmpeg_vfilter/
+```
+
 ### 4.1 示例1：官方例程  
-[https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c](https://github.com/FFmpeg/FFmpeg/blob/n4.1/doc/examples/filtering_video.c)  
 官方例程实现的功能是：打开一个视频文件，解码后经过滤镜处理，然后以简单灰度模式在命令窗口中播放视频帧。  
 
 例程中使用的滤镜选项是`scale=78:24,transpose=cclock`，表示先用scale滤镜将视频帧缩放到78x24像素，再用transpose滤镜将视频帧逆时针旋转90度。  
@@ -631,7 +638,7 @@ filters_descr描述的滤镜如下图所示：
 官方例程主要演示滤镜API的使用方法，代码量较少，简化了视频播放部分，这样使得滤镜的处理效果无法直观观察。示例2针对此问题，在官方代码基础上增加了正常的视频播放效果。  
 
 #### 4.2.1 代码  
-在[https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/](https://github.com/leichn/exercises/blob/master/source/ffmpeg/ffmpeg_vfilter/)目录下有如下几个文件，说明如下：  
+下载代码后，源码目录下有如下几个文件，说明如下：  
 ```
 vfilter_filesrc.c   用于示例2：输入源为视频文件，经滤镜处理后播放
 vfilter_testsrc.c   用于示例3：输入源为测试图，经滤镜处理后播放
@@ -651,7 +658,7 @@ vfilter_filesrc.c是示例2的主程序，实现了打开视频文件，解码�
 #### 4.2.3 测试  
 进入代码目录，在命令行运行`./vf_file ./ring.flv -vf crop=iw/2:ih:0:0,pad=iw*2:ih`  
 滤镜选项`-vf crop=iw/2:ih:0:0,pad=iw*2:ih`表示先将视频裁剪为一半宽度，再填充为二倍宽度，预期结果为视频的右半部分为黑边。  
-测试文件下载：[ring.flv](https://github.com/leichn/blog_resources/blob/master/video/ring.flv)  
+测试文件下载(右键另存为)：[ring.flv](https://github.com/leichn/blog_resources/blob/master/video/ring.flv)  
 未经滤镜处理和经过滤镜处理的视频效果对比如下两图所示：  
 ![ring](https://leichn.github.io/img/ffmpeg_filter/ring.jpg "ring")  
 ![ring_vf](https://leichn.github.io/img/ffmpeg_filter/ring_vf.jpg "ring_vf")  
@@ -661,7 +668,7 @@ vfilter_filesrc.c是示例2的主程序，实现了打开视频文件，解码�
 因测试图直接输出原始视频帧，不需解码器，因此示例3中用到AVFilter库，不需要用到AVFormat库。  
 
 #### 4.3.1 代码  
-3.2节源码目录中vfilter_testsrc.c就是用于示例3的主程序，实现了构建测试源，滤镜处理，播放的主流程。除滤镜输入源的获取方式与示例2不同之外，其他过程并无不同。  
+4.2节源码目录中vfilter_testsrc.c就是用于示例3的主程序，实现了构建测试源，滤镜处理，播放的主流程。除滤镜输入源的获取方式与示例2不同之外，其他过程并无不同。  
 
 示例3增加的关键内容是构造测试源，参考vfilter_testsrc.c中如下函数：  
 ```c  
@@ -742,7 +749,7 @@ end:
 ![pic4](https://leichn.github.io/img/ffmpeg_filter/pic4.jpg "pic4")  
 
 #### 4.3.2 编译  
-进入代码目录，在命令行运行`make vf_test`，将生成vf_test可执行文件  
+进入源码目录，在命令行运行`make vf_test`，将生成vf_test可执行文件  
 
 #### 4.3.3 测试  
 测试滤镜选项`-vf transpose=cclock,pad=iw+80:ih:40`，此滤镜选项表示先将视频逆时针旋转90度，然后将视频左右两边各增加40像素宽度的黑边  
